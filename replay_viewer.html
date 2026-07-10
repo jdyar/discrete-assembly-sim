@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<!--
+  Copyright (c) 2026 Joshua Dyar. MIT License (see LICENSE).
+
+  Replay viewer for assembler-sim run logs (contract v1, see sim/metrics.py).
+
+  Usage:
+    - Open this file in a browser and drop a run-log JSON onto it (or use
+      the file picker). Produce a log with `python main.py` -> runs/latest.json
+    - If served over http from the repo root (e.g. `python -m http.server`),
+      it auto-loads runs/latest.json.
+
+  Three.js is loaded from a CDN, so first load needs internet access.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>assembler-sim replay</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #0b1020; color: #cbd5e1; overflow: hidden;
+  }
+  #scene { position: fixed; inset: 0; }
+  #hud {
+    position: fixed; left: 0; right: 0; top: 0; z-index: 2;
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    padding: 10px 14px; background: rgba(11,16,32,.85);
+    border-bottom: 1px solid #1e293b; backdrop-filter: blur(4px);
+  }
+  #hud button, #hud select, #hud input[type="file"]::file-selector-button {
+    font: inherit; color: #e2e8f0; background: #1e293b;
+    border: 1px solid #334155; border-radius: 6px; padding: 4px 12px; cursor: pointer;
+  }
+  #hud button:hover { background: #334155; }
+  #scrub { flex: 1 1 160px; min-width: 120px; accent-color: #f97316; }
+  #tick { min-width: 170px; color: #f8fafc; }
+  #state { min-width: 150px; color: #fbbf24; }
+  #legend { color: #64748b; }
+  #legend b { font-weight: 600; }
+  .vox  { color: #60a5fa; } .ghost { color: #94a3b8; }
+  .bot  { color: #f97316; } .gnd   { color: #6b7280; }
+  .bad  { color: #ef4444; }
+  #drop {
+    position: fixed; inset: 0; z-index: 3; display: grid; place-items: center;
+    background: rgba(11,16,32,.92); text-align: center; padding: 24px;
+  }
+  #drop.hidden { display: none; }
+  #drop .box {
+    border: 2px dashed #334155; border-radius: 12px; padding: 48px 64px;
+  }
+  #drop h1 { font-size: 16px; color: #f8fafc; margin-bottom: 10px; }
+  #drop p { color: #94a3b8; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+
+<div id="hud">
+  <button id="play">▶ play</button>
+  <input id="scrub" type="range" min="0" max="0" value="0" step="1" />
+  <span id="tick">tick –/–</span>
+  <span id="state"></span>
+  <select id="speed">
+    <option value="240">0.5×</option>
+    <option value="120" selected>1×</option>
+    <option value="60">2×</option>
+    <option value="30">4×</option>
+  </select>
+  <input id="file" type="file" accept=".json,application/json" />
+  <span id="legend">
+    <b class="vox">■</b> voxel&nbsp; <b class="bad">■</b> defect&nbsp;
+    <b class="ghost">□</b> blueprint&nbsp;
+    <b class="bot">■</b> robot&nbsp; <b class="gnd">■</b> ground&nbsp;
+    · space = play/pause, ←/→ = step, drag = orbit, wheel = zoom
+  </span>
+</div>
+
+<div id="drop">
+  <div class="box">
+    <h1>assembler-sim replay viewer</h1>
+    <p>Drop a run-log JSON here (e.g. <code>runs/latest.json</code> from <code>python main.py</code>)<br>
+       or pick a file in the toolbar above.</p>
+  </div>
+</div>
+
+<script type="importmap">
+  { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from "three";
+
+/* ---------- scene ---------- */
+const container = document.getElementById("scene");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1020);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+sun.position.set(6, 10, 8);
+scene.add(sun);
+
+/* Minimal orbit: drag to rotate, wheel to zoom. */
+const orbit = { theta: 0.9, phi: 1.15, radius: 16, target: new THREE.Vector3() };
+function applyCamera() {
+  const { theta, phi, radius, target } = orbit;
+  camera.position.set(
+    target.x + radius * Math.sin(phi) * Math.sin(theta),
+    target.y + radius * Math.cos(phi),
+    target.z + radius * Math.sin(phi) * Math.cos(theta),
+  );
+  camera.lookAt(target);
+}
+let dragging = false, px = 0, py = 0;
+renderer.domElement.addEventListener("pointerdown", e => { dragging = true; px = e.clientX; py = e.clientY; });
+addEventListener("pointerup", () => dragging = false);
+addEventListener("pointermove", e => {
+  if (!dragging) return;
+  orbit.theta -= (e.clientX - px) * 0.008;
+  orbit.phi = Math.min(Math.PI - 0.15, Math.max(0.15, orbit.phi - (e.clientY - py) * 0.008));
+  px = e.clientX; py = e.clientY;
+  applyCamera();
+});
+renderer.domElement.addEventListener("wheel", e => {
+  e.preventDefault();
+  orbit.radius = Math.min(80, Math.max(4, orbit.radius * (e.deltaY > 0 ? 1.1 : 0.9)));
+  applyCamera();
+}, { passive: false });
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+resize();
+
+/* ---------- materials ---------- */
+const matGround = new THREE.MeshStandardMaterial({ color: 0x4b5563, roughness: 0.9 });
+const matVoxel  = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.55 });
+const matDefect = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5, emissive: 0x450a0a });
+const matGhost  = new THREE.MeshStandardMaterial({ color: 0x93c5fd, transparent: true, opacity: 0.16 });
+const matRobot  = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.4 });
+const matCarry  = new THREE.MeshStandardMaterial({ color: 0x60a5fa, roughness: 0.4 });
+const unitBox   = new THREE.BoxGeometry(0.96, 0.96, 0.96);
+
+/* ---------- run state ---------- */
+const LEGEND_DEFAULT = { EMPTY: 0, GROUND: 1, VOXEL: 2, DEFECT: 3 };
+let run = null;           // parsed run-log JSON
+let legend = LEGEND_DEFAULT;
+let cells = new Map();    // "r,c" -> mesh for buildable cells
+let blueprintSet = new Set();
+let robotMesh = null, carryMesh = null;
+let buildGroup = new THREE.Group();
+scene.add(buildGroup);
+
+let frame = 0, playing = false, elapsed = 0;
+
+const $ = id => document.getElementById(id);
+const scrub = $("scrub"), tickLabel = $("tick"), stateLabel = $("state");
+const playBtn = $("play"), speedSel = $("speed");
+
+/* Grid (row, col) -> world position. Ground row sits at y = 0. */
+function cellPos(rows, r, c, cols) {
+  return new THREE.Vector3(c - (cols - 1) / 2, (rows - 1) - r, 0);
+}
+
+function loadRun(data) {
+  if (!data || data.version !== 1 || !Array.isArray(data.ticks) || data.ticks.length === 0) {
+    alert("Not a v1 run log (expected {version:1, ticks:[...]}).");
+    return;
+  }
+  run = data;
+  legend = (data.meta && data.meta.legend) || LEGEND_DEFAULT;
+  const { rows, cols } = data.meta;
+
+  scene.remove(buildGroup);
+  buildGroup = new THREE.Group();
+  scene.add(buildGroup);
+  cells = new Map();
+  blueprintSet = new Set(data.blueprint.map(([r, c]) => r + "," + c));
+
+  const occ0 = data.ticks[0].occupancy;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const pos = cellPos(rows, r, c, cols);
+      if (occ0[r][c] === legend.GROUND) {
+        const g = new THREE.Mesh(unitBox, matGround);
+        g.position.copy(pos);
+        buildGroup.add(g);
+      } else {
+        const m = new THREE.Mesh(unitBox, matVoxel);
+        m.position.copy(pos);
+        m.visible = false;
+        buildGroup.add(m);
+        cells.set(r + "," + c, m);
+      }
+    }
+  }
+
+  robotMesh = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), matRobot);
+  carryMesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), matCarry);
+  robotMesh.visible = carryMesh.visible = false;
+  buildGroup.add(robotMesh, carryMesh);
+
+  orbit.target = new THREE.Vector3(0, rows / 2, 0);
+  orbit.radius = Math.max(rows, cols) * 1.9;
+  applyCamera();
+
+  scrub.max = String(data.ticks.length - 1);
+  setFrame(0);
+  setPlaying(true);
+  $("drop").classList.add("hidden");
+}
+
+function setFrame(i) {
+  if (!run) return;
+  frame = Math.max(0, Math.min(run.ticks.length - 1, i));
+  const f = run.ticks[frame];
+  const occ = f.occupancy;
+
+  for (const [key, mesh] of cells) {
+    const [r, c] = key.split(",").map(Number);
+    if (occ[r][c] === legend.VOXEL) {
+      mesh.visible = true; mesh.material = matVoxel;
+    } else if (legend.DEFECT !== undefined && occ[r][c] === legend.DEFECT) {
+      mesh.visible = true; mesh.material = matDefect;
+    } else if (blueprintSet.has(key)) {
+      mesh.visible = true; mesh.material = matGhost;
+    } else {
+      mesh.visible = false;
+    }
+  }
+
+  const robot = f.robot;
+  if (robot) {
+    const { rows, cols } = run.meta;
+    const pos = cellPos(rows, robot.pos[0], robot.pos[1], cols);
+    robotMesh.position.copy(pos);
+    robotMesh.visible = true;
+    carryMesh.position.copy(pos).add(new THREE.Vector3(0, 0.62, 0));
+    carryMesh.visible = !!robot.carrying;
+    stateLabel.textContent = robot.state + (robot.carrying ? " ●" : "");
+  } else {
+    robotMesh.visible = carryMesh.visible = false;
+    stateLabel.textContent = "";
+  }
+
+  scrub.value = String(frame);
+  tickLabel.textContent =
+    `tick ${f.tick}/${run.ticks[run.ticks.length - 1].tick} · placed ${f.placed}/${run.blueprint.length}`;
+}
+
+function setPlaying(on) {
+  playing = on && !!run;
+  playBtn.textContent = playing ? "❚❚ pause" : "▶ play";
+}
+
+/* ---------- controls ---------- */
+playBtn.addEventListener("click", () => setPlaying(!playing));
+scrub.addEventListener("input", () => { setPlaying(false); setFrame(Number(scrub.value)); });
+addEventListener("keydown", e => {
+  if (e.code === "Space") { e.preventDefault(); setPlaying(!playing); }
+  if (e.code === "ArrowRight") { setPlaying(false); setFrame(frame + 1); }
+  if (e.code === "ArrowLeft") { setPlaying(false); setFrame(frame - 1); }
+});
+
+async function loadFile(file) {
+  try { loadRun(JSON.parse(await file.text())); }
+  catch (err) { alert("Could not parse JSON: " + err.message); }
+}
+$("file").addEventListener("change", e => e.target.files[0] && loadFile(e.target.files[0]));
+addEventListener("dragover", e => e.preventDefault());
+addEventListener("drop", e => {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+
+/* Auto-load runs/latest.json when served over http (fails silently on file://). */
+fetch("runs/latest.json")
+  .then(r => (r.ok ? r.json() : Promise.reject()))
+  .then(loadRun)
+  .catch(() => {});
+
+/* ---------- loop ---------- */
+let last = performance.now();
+function tickLoop(now) {
+  requestAnimationFrame(tickLoop);
+  const dt = now - last;
+  last = now;
+  if (playing) {
+    elapsed += dt;
+    const interval = Number(speedSel.value);
+    while (elapsed >= interval) {
+      elapsed -= interval;
+      if (frame >= run.ticks.length - 1) { setPlaying(false); break; }
+      setFrame(frame + 1);
+    }
+  }
+  renderer.render(scene, camera);
+}
+applyCamera();
+requestAnimationFrame(tickLoop);
+</script>
+</body>
+</html>
