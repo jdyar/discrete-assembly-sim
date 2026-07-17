@@ -1,97 +1,115 @@
 # discrete-assembly-sim
 
-**An open discrete-assembly simulator: blueprint → validated build order → robot execution → defect detection & error correction — with a replayable log of every run.**
+**An open coordination stack for lattice-building robot swarms: blueprint → validated build order → multi-robot choreography → verification & error correction — with a replayable log of every run.**
 
-A small "relative robot" (MIT BILL-E / NASA ARMADAS lineage) crawls on the voxel structure it is building: it fetches parts from a depot, places them per a solver-validated build order, inspects every placement, and removes-and-replaces defective parts by replanning from the world as it actually is.
+Small "relative robots" (MIT BILL-E / NASA ARMADAS lineage) crawl on the voxel structure they are building: they fetch parts from a depot, claim tasks from a solver-validated build order, negotiate space through a shared reservation table, inspect every placement, and remove-and-replace defective parts *while the rest of the swarm keeps working*.
 
-![Replay of a build with defect repair — red voxels are bad bonds; watch them get inspected, removed, and replaced](docs/replay.gif)
+![Two robots assembling a hollow 3D box — ghost cells are unbuilt blueprint](docs/replay3d.png)
 
-## The point: error correction makes yield digital
+**30-second version:** the robots for discrete lattice assembly exist (NASA, MIT, Harvard have all flown or published them) — but the *coordination software* is the missing layer. NASA's planner isn't public, the best academic planner is legally unusable (no license), and nobody ships a working mid-swarm repair loop. This repo is that layer, MIT-licensed, built so you can plug in **your** robot's capabilities as config.
 
-Discrete ("digital") materials promise the same thing for matter that error correction gave to data: **reliable wholes from unreliable steps**. Each placement here fails with probability *p* (a bad bond — the part sits in the lattice but doesn't count). A blind builder's yield decays like (1−p)ⁿ-per-part; a builder that inspects each placement, removes bad parts, and replans holds ~100% yield and simply pays a time cost instead:
+## Why 3D is the game
+
+The same coordination code that manages **zero speedup in 2D** (a wall build is a single-file corridor — the second robot starves) gets **real parallelism in 3D**, because the structure's surface gives robots room to route around each other:
+
+![Build time vs robot count on a 3D hollow box: 472 ticks alone, ×1.70 with two robots, ×2.24 with three](docs/speedup_3d.png)
+
+Zero collisions, zero deadlocks, roof placed last so nobody gets sealed inside. Reproduce with `python main.py speedup3d`.
+
+## Error correction makes yield digital
+
+Discrete ("digital") materials promise what error correction gave to data: **reliable wholes from unreliable steps**. Each placement fails with probability *p* (a bad bond). A blind builder's yield decays like (1−p)ⁿ; a builder that inspects, removes, and replans holds ~100% yield and pays time instead:
 
 ![Yield vs defect rate, with and without error correction](docs/yield_vs_p.png)
 
-At the spec point (p = 0.08, 10 seeds): **corrected yield 100% (target ≥ 99%: PASS)**; the no-correction baseline decays roughly as (1−p) to ~83% at p = 0.15. Reproduce with `python main.py yield`.
-
-In a survey of 42 related research codebases (MIT CBA, NASA-lineage, TERMES, assembly-planning papers), build-time error correction appeared only rarely — mostly as closed-form theory, not as a working inspect-and-replan loop. This sim makes that loop concrete and measurable.
+At p = 0.08 (10 seeds): **corrected yield 100%**; the baseline decays to ~83% at p = 0.15. Reproduce with `python main.py yield`. In a survey of 42 related research codebases, a working inspect-remove-replan loop appeared in none of them.
 
 ## Quickstart
 
-Requires Python 3.10+.
+Requires Python 3.10+. Pure Python + numpy + matplotlib — no game engine, no ROS, no build step.
 
 ```bash
 git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-assembly-sim
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt  # numpy + matplotlib
+pip install -r requirements.txt
 
-python main.py            # demo: build with defects (p=0.12) + repair -> runs/latest.json
-python main.py yield      # the yield-vs-p experiment -> runs/yield_vs_p.png
-python main.py slice1     # clean build, no defects, + ticks-per-voxel chart
-python main.py slice0     # the original one-loop ASCII build
+python main.py swarm3d 2      # 2 robots build a 3D hollow box -> runs/latest.json
+python main.py speedup3d      # the speedup-vs-N experiment -> runs/speedup_3d.png
+python main.py swarm 2        # 2 robots, 2D wall (the degenerate case, kept honest)
+python main.py                # single robot, defects + repair (the yield demo)
+python main.py yield          # the yield-vs-p experiment -> runs/yield_vs_p.png
 
-python -m unittest        # test suite (38 tests)
+python -m unittest            # 82 tests, including the adversarial trap suite
 ```
 
-**Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it (play / pause / scrub / orbit). If you serve the repo root (`python -m http.server`) it auto-loads the latest run. No browser handy? `python -m sim.render runs/latest.json` animates the same log in matplotlib, or renders a GIF with `python -m sim.render runs/latest.json out.gif`.
+**Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run.
+
+## Plug in your robot
+
+The design bet of this repo: **coordination logic is invariant to robot hardware.** Everything your robot *is* lives behind two small seams, and the choreographer never looks past them:
+
+- **`Geometry`** (`sim/geometry.py`) — what a lattice is: `neighbors(node)`, `is_footing(node)`, `reach_cells(node)`. Nodes are opaque values; the 2D square lattice and the 3D cubic lattice are both ~150-line implementations, and the test suite includes a string-node triangle-lattice fake to prove nothing upstream assumes coordinates.
+- **`MotionModel`** (`sim/geometry3d.py`) — what your robot can do: today `reach_radius` (place a block up to N cells away, like SOLL-E-class strides and arms); next on the roadmap: climb limit, multi-cell inchworm steps, and two robots coupling into a longer arm (BILL-E cooperative manipulation lineage).
+
+If your lab's robot climbs exactly one block (TERMES-style), that's config. If it places four cells away around a corner, that's config. The sequencer, reservation table, connectivity gates, and repair loop don't change — that invariance is tested, not aspirational: the 3D pivot ran the entire coordination stack on a new lattice with zero logic changes.
+
+The **trap fixtures** (`tests/test_traps.py`, `tests/test_traps3d.py`) double as a benchmark: each one encodes a published failure class — TERMES-style enclosure deadlocks, MAPF corridor swaps, single-path interiors — with the reasoning in its docstring. If you're building your own planner, point it at these.
 
 ## How it works
 
 ```
 main.py                 # entry point / run configs (the modes above)
 sim/
-  world.py              # 2D numpy grid: occupancy (EMPTY/GROUND/VOXEL/DEFECT) + blueprint mask
-  planner.py            # build-order solver (DFS + memoized dead ends) + independent plan validator
-  robot.py              # robot state machine, locomotion rules, BFS pathing
-  metrics.py            # per-tick run logging (replayable JSON, contract v1) + charts
-  render.py             # ASCII frames + matplotlib animation of a run log
-  parts.py              # placeholder for typed parts (roadmap)
-tests/                  # unit + invariant tests for all of the above
-replay_viewer.html      # zero-build Three.js replay viewer (drop a run log in)
+  world.py, world3d.py  # occupancy grids (2D / 3D) + blueprint masks
+  geometry.py           # THE SEAM: lattice interface + 2D square lattice
+  geometry3d.py         # 3D cubic lattice + MotionModel (reach as config)
+  planner.py            # build-order solver (proves safety at every step) + validator
+  sequencer + swarm.py  # task claiming, kickback loop, displacement, watchdog
+  choreographer.py      # cooperative A* over a time-expanded graph + placement gates
+  reservations.py       # the shared table: leases (movement) + deeds (placement)
+  texgraph.py           # time-expanded graph (space x time successor generation)
+  robot.py              # single-robot state machine (the Slice 1-2 build)
+  metrics.py            # replayable JSON run logs (v1/v2/v3) + charts
+  render.py             # ASCII + matplotlib animation
+tests/                  # 82 tests incl. spec-first adversarial trap fixtures
+replay_viewer.html      # zero-build Three.js replay viewer (2D + 3D)
+docs/DESIGN.md          # binding architecture rules + provenance per stage
 ```
 
-**Robot** (`sim/robot.py`) — an inchworm-style relative robot that grips the structure: it may occupy any empty cell adjacent to ground or a placed voxel, crawls one cell per tick along surfaces (diagonals only when rounding a corner), and places into any of the 8 cells around its stance. It senses only adjacent cells plus its current task — no global knowledge except the blueprint and depot. One action per tick:
-
-```
-IDLE ──task──> TO_DEPOT ──at depot──> PICK ──picked──> TO_SITE
-  ^                                                       │
-  │                                        at approach ── ┘
-  │                                                       v
-  └── queue empty ── INSPECT(ok) <────────────────────  PLACE
-         ^                │(defective)
-         │                v
-   replan loaded ────  REMOVE ── discard, halt, request replan
-```
-
-**Planner** (`sim/planner.py`) — computes the full build order upfront; the robot executes it blindly as a queue. Every accepted order guarantees, at every step with a depot round trip between placements: (1) the target is reachable from a legal stance when placed, (2) the robot is never stranded from the depot, (3) no unbuilt cell gets walled off. `None` is returned only on exhaustive proof that no valid order exists; hitting the search budget raises instead (feasibility undecided, never silently misreported). `validate_plan` re-simulates every plan against the same rules before execution — defense in depth.
-
-**Error correction (the thesis demo)** — each placement is defective with probability *p* (bad bond: occupies the cell, crawlable, doesn't count toward completion, indistinguishable without inspecting). INSPECT costs 1 tick from the placement stance — modeled on ARMADAS's vision-free, fastening-time feedback. On a defect: REMOVE (1 tick), discard, halt, and request a replan; the executor re-runs the planner on the current world (replanning is offboard software and costs 0 robot ticks). The robot never mutates a plan — plan / execute / replan-on-failure.
-
-**Run logs** — every run emits one JSON log (contract documented in `sim/metrics.py`) consumed by both the Three.js viewer and the matplotlib animator. Every milestone ends with a metrics chart, not just an animation.
+The multi-robot core, in one paragraph: an idle robot claims the nearest task from the **sequencer**'s validated build order, and the **choreographer** plans its whole task (to depot → pick → to stance → place → inspect) as a shortest path through a **time-expanded graph** — space × time, where waiting is a move — against everyone's existing reservations. Before committing, two gates run: the placement must not disconnect any robot's future from the depot (**connectivity gate**, proven on the world-plus-all-deeds graph), and must leave the rest of the blueprint completable (**buildability gate**). A refusal is a **kickback**: the task returns for reordering and the world moves on — never a deadlock, never a frozen swarm. A defect found at inspect triggers remove + re-sequence *through* live traffic. Full rules and provenance: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Background & references
 
-This simulator is a software study of the **discrete lattice assembly** lineage — it is a simulator, not flight hardware:
+A software study of the **discrete lattice assembly** lineage — simulator, not flight hardware:
 
-- **Digital materials** — Gershenfeld et al. (MIT Center for Bits and Atoms): structures from small families of discrete, reversibly-joined parts; discreteness makes errors detectable and correctable, digital vs analog. Also Cheung & Gershenfeld, *Reversibly Assembled Cellular Composite Materials* (Science, 2013).
-- **Relative robots** — Jenett & Gershenfeld, **BILL-E** (Bipedal Isotropic Lattice Locomoting Explorer): robots smaller than the structure that locomote on the lattice they build; the lattice provides alignment, so the robot needs no global precision.
-- **NASA Ames ARMADAS** — the lineage's flagship: cuboctahedral voxels, SOLL-E inchworm builder robots, MMIC-I fastening robot; autonomous meter-scale builds demonstrated (Science Robotics, 2024). Notably, it error-corrects **without machine vision** — detection comes from fastening-time feedback, which this sim's 1-tick INSPECT models directly.
-- **TERMES** — Werfel, Petersen & Nagpal, *Designing collective behavior in a termite-inspired robot construction team* (Science, 2014), and Petersen et al.'s error taxonomy for collective robotic construction, which motivates the defect model here.
-- **Theory backbone** — Winfree's abstract Tile Assembly Model ("compile a shape into local rules"); the 1980 NASA summer study on self-replicating lunar factories as the long-arc reference.
-
-The gap this project probes: in the codebases surveyed so far, no open, maintained toolchain covered **blueprint → validated build sequence → multi-robot choreography → verification/error-correction** end to end. (The supporting survey — deep-research reports and per-repo code digests of 42 codebases — lives in a companion research repo.)
+- **Digital materials** — Gershenfeld et al. (MIT CBA); Cheung & Gershenfeld, *Reversibly Assembled Cellular Composite Materials* (Science, 2013).
+- **Relative robots** — Jenett & Gershenfeld, **BILL-E**: robots smaller than the structure, locomoting on the lattice they build; cooperative manipulation between coupled robots (NTRS 20170006219).
+- **NASA Ames ARMADAS** — cuboctahedral voxels, SOLL-E inchworm builders, autonomous meter-scale builds (Gregg et al., Science Robotics, 2024). The choreography here is implemented clean-room from its published planning description: cooperative A*, node reservations, storage-location deadlock-freedom.
+- **TERMES** — Werfel, Petersen & Nagpal (Science, 2014) + Petersen et al.'s error taxonomy; source of two of the trap-fixture failure classes.
+- **MAPF** — Stern et al., *Multi-Agent Pathfinding: Definitions, Variants, and Benchmarks* (arXiv:1906.08291); source of the corridor-swap trap.
+- **Theory backbone** — Winfree's Tile Assembly Model; the 1980 NASA self-replicating lunar factory study as the long arc.
 
 ## Roadmap
 
-Built in vertical slices — every milestone is a running end-to-end program:
+Built in vertical slices — every milestone is a running end-to-end program with a metrics chart:
 
-- ✅ **Slice 0** — world + blueprint + one-voxel-per-tick loop (ASCII)
-- ✅ **Slice 1** — single robot, build-order solver, full 6×4 wall (402 ticks, 16.8 ticks/voxel), replay viewer + metrics
-- ✅ **Slice 2** — defects + inspect/remove/replan; ≥99% yield at p = 0.08 (this README's chart)
-- ⏳ **Slice 3** — multiple robots: collision avoidance, task claiming, speedup-vs-robots chart
-- ⏳ **Slice 4** — typed part family (rigid / flexible / conductive / actuator): a structure that is also a machine
-- ⏳ **Slice 5** — 3D lattice + gravity + structural checks on partial builds
+- ✅ World, blueprint, single robot, validated build orders (6×4 wall)
+- ✅ Error correction: inspect / remove / replan, ≥99% yield at p = 0.08
+- ✅ Multi-robot choreographer: reservations, gates, adversarial trap suite (2D)
+- ✅ 3D: cubic lattice behind the same interface, first real speedup (×2.24 @ 3 robots)
+- ⏳ 3D at scale: fuzzed coordination, congestion knee (speedup-vs-N to 5+), mid-swarm repair in 3D
+- ⏳ Motion-model realism: reach ≈ 4 with snake-arm articulation, climb limits, coupled-robot extended reach — all as config, with the coordination logic provably unchanged
+- ⏳ Typed part families; gravity + structural checks on partial builds
+
+## Contributing & feedback
+
+Contributions and criticism are both welcome — this is meant to be the reference implementation the field can legally build on, and it gets better with more eyes on it.
+
+- **Easiest high-value contribution: break it.** Write a trap — a blueprint + robot placement you believe deadlocks, starves, or entombs a robot — as a test like the ones in `tests/test_traps3d.py`. If it fails, you've found a real bug and the fixture is the regression test.
+- **Have different hardware?** Implement a `Geometry`/`MotionModel` for your lattice or robot and tell us what the interface couldn't express — interface gaps are the most valuable bug reports this project can get.
+- **Know this literature?** If we've mis-read or missed prior art (especially on reservation schemes or repair-during-construction), open an issue with the citation. Provenance corrections are taken seriously — see the clean-room policy in [docs/DESIGN.md](docs/DESIGN.md).
+- Start with [CONTRIBUTING.md](CONTRIBUTING.md) for setup, test conventions, and the list of good first issues. For questions and design discussion, use [GitHub Discussions](../../discussions); for bugs, [Issues](../../issues).
 
 ## License
 

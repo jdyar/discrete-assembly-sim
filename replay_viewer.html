@@ -149,7 +149,10 @@ const matGround = new THREE.MeshStandardMaterial({ color: 0x4b5563, roughness: 0
 const matVoxel  = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.55 });
 const matDefect = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5, emissive: 0x450a0a });
 const matGhost  = new THREE.MeshStandardMaterial({ color: 0x93c5fd, transparent: true, opacity: 0.16 });
-const matRobot  = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.4 });
+/* One color per robot id (multi-robot runs, contract v2). */
+const ROBOT_COLORS = [0xf97316, 0xa855f7, 0x10b981, 0xeab308, 0xec4899, 0x14b8a6];
+const matRobots = ROBOT_COLORS.map(
+  c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.4 }));
 const matCarry  = new THREE.MeshStandardMaterial({ color: 0x60a5fa, roughness: 0.4 });
 const unitBox   = new THREE.BoxGeometry(0.96, 0.96, 0.96);
 
@@ -159,7 +162,7 @@ let run = null;           // parsed run-log JSON
 let legend = LEGEND_DEFAULT;
 let cells = new Map();    // "r,c" -> mesh for buildable cells
 let blueprintSet = new Set();
-let robotMesh = null, carryMesh = null;
+let robotMeshes = [], carryMeshes = [];
 let buildGroup = new THREE.Group();
 scene.add(buildGroup);
 
@@ -169,51 +172,76 @@ const $ = id => document.getElementById(id);
 const scrub = $("scrub"), tickLabel = $("tick"), stateLabel = $("state");
 const playBtn = $("play"), speedSel = $("speed");
 
-/* Grid (row, col) -> world position. Ground row sits at y = 0. */
-function cellPos(rows, r, c, cols) {
+/* Node -> world position. v1/v2 nodes are [row, col] (row 0 = top,
+   ground at the bottom row); v3 nodes are [level, row, col] (level 0 =
+   ground plane, up is +level). Both map onto the same Three.js space. */
+function nodePos(node) {
+  const { rows, cols } = run.meta;
+  if (node.length === 3) {
+    const [l, r, c] = node;
+    return new THREE.Vector3(c - (cols - 1) / 2, l, r - (rows - 1) / 2);
+  }
+  const [r, c] = node;
   return new THREE.Vector3(c - (cols - 1) / 2, (rows - 1) - r, 0);
 }
+const occAt = (occ, n) =>
+  n.length === 3 ? occ[n[0]][n[1]][n[2]] : occ[n[0]][n[1]];
 
 function loadRun(data) {
-  if (!data || data.version !== 1 || !Array.isArray(data.ticks) || data.ticks.length === 0) {
-    alert("Not a v1 run log (expected {version:1, ticks:[...]}).");
+  if (!data || ![1, 2, 3].includes(data.version) || !Array.isArray(data.ticks) || data.ticks.length === 0) {
+    alert("Not a v1/v2/v3 run log (expected {version:1|2|3, ticks:[...]}).");
     return;
   }
   run = data;
   legend = (data.meta && data.meta.legend) || LEGEND_DEFAULT;
-  const { rows, cols } = data.meta;
+  const { rows, cols, levels } = data.meta;
 
   scene.remove(buildGroup);
   buildGroup = new THREE.Group();
   scene.add(buildGroup);
   cells = new Map();
-  blueprintSet = new Set(data.blueprint.map(([r, c]) => r + "," + c));
+  blueprintSet = new Set(data.blueprint.map(n => n.join(",")));
+
+  const nodes = [];
+  if (data.version === 3) {
+    for (let l = 0; l < levels; l++)
+      for (let r = 0; r < rows; r++)
+        for (let c = 0; c < cols; c++) nodes.push([l, r, c]);
+  } else {
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++) nodes.push([r, c]);
+  }
 
   const occ0 = data.ticks[0].occupancy;
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const pos = cellPos(rows, r, c, cols);
-      if (occ0[r][c] === legend.GROUND) {
-        const g = new THREE.Mesh(unitBox, matGround);
-        g.position.copy(pos);
-        buildGroup.add(g);
-      } else {
-        const m = new THREE.Mesh(unitBox, matVoxel);
-        m.position.copy(pos);
-        m.visible = false;
-        buildGroup.add(m);
-        cells.set(r + "," + c, m);
-      }
+  for (const n of nodes) {
+    const pos = nodePos(n);
+    if (occAt(occ0, n) === legend.GROUND) {
+      const g = new THREE.Mesh(unitBox, matGround);
+      g.position.copy(pos);
+      buildGroup.add(g);
+    } else {
+      const m = new THREE.Mesh(unitBox, matVoxel);
+      m.position.copy(pos);
+      m.visible = false;
+      buildGroup.add(m);
+      cells.set(n.join(","), m);
     }
   }
 
-  robotMesh = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), matRobot);
-  carryMesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), matCarry);
-  robotMesh.visible = carryMesh.visible = false;
-  buildGroup.add(robotMesh, carryMesh);
+  const frameCrew = f => f.robots ?? (f.robot ? [f.robot] : []);
+  const maxRobots = Math.max(0, ...data.ticks.map(f => frameCrew(f).length));
+  robotMeshes = []; carryMeshes = [];
+  for (let i = 0; i < maxRobots; i++) {
+    const rm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7),
+                              matRobots[i % matRobots.length]);
+    const cm = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), matCarry);
+    rm.visible = cm.visible = false;
+    buildGroup.add(rm, cm);
+    robotMeshes.push(rm); carryMeshes.push(cm);
+  }
 
-  orbit.target = new THREE.Vector3(0, rows / 2, 0);
-  orbit.radius = Math.max(rows, cols) * 1.9;
+  orbit.target = new THREE.Vector3(0, (data.version === 3 ? levels : rows) / 2, 0);
+  orbit.radius = Math.max(rows, cols, (levels || 0) * 2) * 1.9;
   applyCamera();
 
   scrub.max = String(data.ticks.length - 1);
@@ -229,10 +257,11 @@ function setFrame(i) {
   const occ = f.occupancy;
 
   for (const [key, mesh] of cells) {
-    const [r, c] = key.split(",").map(Number);
-    if (occ[r][c] === legend.VOXEL) {
+    const n = key.split(",").map(Number);
+    const v = occAt(occ, n);
+    if (v === legend.VOXEL) {
       mesh.visible = true; mesh.material = matVoxel;
-    } else if (legend.DEFECT !== undefined && occ[r][c] === legend.DEFECT) {
+    } else if (legend.DEFECT !== undefined && v === legend.DEFECT) {
       mesh.visible = true; mesh.material = matDefect;
     } else if (blueprintSet.has(key)) {
       mesh.visible = true; mesh.material = matGhost;
@@ -241,19 +270,23 @@ function setFrame(i) {
     }
   }
 
-  const robot = f.robot;
-  if (robot) {
-    const { rows, cols } = run.meta;
-    const pos = cellPos(rows, robot.pos[0], robot.pos[1], cols);
-    robotMesh.position.copy(pos);
-    robotMesh.visible = true;
-    carryMesh.position.copy(pos).add(new THREE.Vector3(0, 0.62, 0));
-    carryMesh.visible = !!robot.carrying;
-    stateLabel.textContent = robot.state + (robot.carrying ? " ●" : "");
-  } else {
-    robotMesh.visible = carryMesh.visible = false;
-    stateLabel.textContent = "";
+  const crew = f.robots ?? (f.robot ? [f.robot] : []);
+  for (let i = 0; i < robotMeshes.length; i++) {
+    const robot = crew[i];
+    if (robot) {
+      const pos = nodePos(robot.pos);
+      robotMeshes[i].position.copy(pos);
+      robotMeshes[i].visible = true;
+      carryMeshes[i].position.copy(pos).add(new THREE.Vector3(0, 0.62, 0));
+      carryMeshes[i].visible = !!robot.carrying;
+    } else {
+      robotMeshes[i].visible = carryMeshes[i].visible = false;
+    }
   }
+  stateLabel.textContent =
+    crew.length === 1
+      ? crew[0].state + (crew[0].carrying ? " ●" : "")
+      : crew.map((r, i) => `r${i}:${r.state}${r.carrying ? "●" : ""}`).join("  ");
 
   scrub.value = String(frame);
   tickLabel.textContent =

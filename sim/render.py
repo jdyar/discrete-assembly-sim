@@ -54,14 +54,43 @@ def render_ascii(world: World) -> str:
     return "\n".join(lines)
 
 
+def render_ascii3d(world) -> str:
+    """Per-level ASCII slices of a 3D world, ground level omitted.
+
+    Levels print bottom-up, side by side is left to the reader's terminal
+    width — each level is its own block, labeled. Same glyphs as 2D.
+    """
+    blocks: list[str] = []
+    for level in range(1, world.levels):
+        lines = [f"level {level}:"]
+        for r in range(world.rows):
+            chars = []
+            for c in range(world.cols):
+                occ = int(world.occupancy[level, r, c])
+                if occ == EMPTY and world.blueprint[level, r, c]:
+                    chars.append("o")
+                else:
+                    chars.append(_GLYPHS[occ])
+            lines.append("".join(chars))
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _frame_robots(frame: dict[str, Any]) -> list[dict[str, Any]]:
+    """Robot snapshots from a v2 ("robots") or v1 ("robot") frame."""
+    if "robots" in frame:
+        return [r for r in frame["robots"] if r is not None]
+    robot = frame.get("robot")
+    return [robot] if robot is not None else []
+
+
 def _display_grid(frame: dict[str, Any], blueprint: list[list[int]]) -> list[list[int]]:
     """Occupancy grid with ghost-blueprint and robot overlays applied."""
     grid = [row[:] for row in frame["occupancy"]]
     for r, c in blueprint:
         if grid[r][c] == EMPTY:
             grid[r][c] = _GHOST
-    robot = frame.get("robot")
-    if robot is not None:
+    for robot in _frame_robots(frame):
         rr, rc = robot["pos"]
         grid[rr][rc] = _ROBOT
     return grid
@@ -79,6 +108,11 @@ def animate_run(
     shown; otherwise a window opens (unless ``show=False``, for tests).
     Matplotlib is imported lazily so ASCII rendering stays dependency-light.
     """
+    if run.get("version") == 3 or "levels" in run.get("meta", {}):
+        raise ValueError(
+            "3D run logs (v3) are replayed in replay_viewer.html; "
+            "the matplotlib animation is 2D-only"
+        )
     import matplotlib
 
     if save_path is not None or not show:
@@ -105,8 +139,13 @@ def animate_run(
     def draw(i: int):
         frame = frames[i]
         image.set_data(_display_grid(frame, blueprint))
-        robot = frame.get("robot")
-        state = f"  robot: {robot['state']}" if robot else ""
+        crew = _frame_robots(frame)
+        if len(crew) == 1:
+            state = f"  robot: {crew[0]['state']}"
+        elif crew:
+            state = "  " + " ".join(f"r{j}:{r['state']}" for j, r in enumerate(crew))
+        else:
+            state = ""
         title.set_text(f"tick {frame['tick']}  placed {frame['placed']}{state}")
         return (image, title)
 

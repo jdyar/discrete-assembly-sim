@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Joshua Dyar. MIT License (see LICENSE).
 """Slice 0 tests: the world fills, renders, and finishes.
 
-Deliberately does not import sim.robot or sim.planner — those are Joshua's
+Deliberately does not import sim.robot or sim.planner — those arrive in later slices
 stubs until Slice 1.
 """
 

@@ -49,7 +49,9 @@ from typing import Any
 
 from .world import DEFECT, EMPTY, GROUND, VOXEL, World
 
-RUN_LOG_VERSION = 1
+RUN_LOG_VERSION = 2  # v2 adds "robots": [snapshot, ...]; "robot" kept for v1 readers
+RUN_LOG_VERSION_3D = 3  # v3 = v2 with 3D nodes: meta gains "levels",
+# nodes are [level, row, col], occupancy is levels x rows x cols
 
 
 @dataclass
@@ -69,9 +71,8 @@ def _robot_snapshot(robot: Any) -> dict[str, Any] | None:
     """Serialize a robot per the contract; ``None`` stays ``None``."""
     if robot is None:
         return None
-    row, col = robot.pos
     return {
-        "pos": [int(row), int(col)],
+        "pos": [int(x) for x in robot.pos],  # (row,col) or (level,row,col)
         "state": str(robot.state),
         "carrying": bool(robot.carrying),
     }
@@ -91,8 +92,21 @@ class RunLog:
     blueprint: list[list[int]] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
 
-    def log_tick(self, tick: int, world: World, robot: Any = None) -> TickRecord:
+    def log_tick(
+        self,
+        tick: int,
+        world: World,
+        robot: Any = None,
+        robots: list | None = None,
+    ) -> TickRecord:
+        """Record one tick. Pass ``robots`` (list) for multi-robot runs
+        (contract v2); ``robot`` stays for single-robot callers. The v2
+        frame always carries "robots" (possibly empty) plus the v1
+        "robot" field (first robot or None) so old readers keep working.
+        """
         if "rows" not in self.meta:  # first tick; keep any pre-seeded extras
+            if world.occupancy.ndim == 3:  # v3: 3D world
+                self.meta.update(levels=world.levels)
             self.meta.update(
                 rows=world.rows,
                 cols=world.cols,
@@ -103,20 +117,24 @@ class RunLog:
                     "DEFECT": DEFECT,
                 },
             )
-            rows, cols = world.blueprint.nonzero()
-            self.blueprint = [[int(r), int(c)] for r, c in zip(rows, cols)]
+            self.blueprint = [
+                [int(x) for x in node] for node in zip(*world.blueprint.nonzero())
+            ]
         rec = TickRecord(
             tick=tick,
             placed=world.built_count,
             blueprint_total=world.blueprint_count,
         )
         self.records.append(rec)
+        crew = robots if robots is not None else ([robot] if robot else [])
+        snapshots = [_robot_snapshot(r) for r in crew]
         self.frames.append(
             {
                 "tick": tick,
                 "occupancy": world.occupancy.tolist(),
                 "placed": rec.placed,
-                "robot": _robot_snapshot(robot),
+                "robot": snapshots[0] if snapshots else None,  # v1 compat
+                "robots": snapshots,
             }
         )
         return rec
@@ -124,9 +142,9 @@ class RunLog:
     # -- export --------------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
-        """The full run log as a dict matching the JSON contract (v1)."""
+        """The full run log as a dict matching the JSON contract."""
         return {
-            "version": RUN_LOG_VERSION,
+            "version": RUN_LOG_VERSION_3D if "levels" in self.meta else RUN_LOG_VERSION,
             "meta": self.meta,
             "blueprint": self.blueprint,
             "ticks": self.frames,
@@ -230,6 +248,54 @@ def yield_vs_p_chart(
     ax.grid(axis="y", color="#e5e7eb", linewidth=0.8, zorder=0)
     ax.spines[["top", "right"]].set_visible(False)
     ax.legend(loc="lower left", frameon=False, fontsize=9)
+    fig.tight_layout()
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def speedup_vs_n_chart(ticks: dict[int, int], path: str | Path) -> Path:
+    """Milestone chart (Slice 4a→4b): build ticks vs robot count, with the
+    speedup factor over N=1 direct-labeled. Single series, project blue;
+    the 2D run's degenerate x1.00 is the mental baseline this chart
+    answers. Saved as PNG.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    ns = sorted(ticks)
+    base = ticks[ns[0]]
+    values = [ticks[n] for n in ns]
+
+    fig, ax = plt.subplots(figsize=(6.4, 4.2))
+    bars = ax.bar([str(n) for n in ns], values, width=0.62,
+                  color="#2563eb", zorder=3)
+    for bar, n, v in zip(bars, ns, values):
+        ax.annotate(
+            f"{v} ticks",
+            xy=(bar.get_x() + bar.get_width() / 2, v),
+            xytext=(0, 4), textcoords="offset points",
+            ha="center", va="bottom", fontsize=9, color="#374151",
+        )
+        if n != ns[0]:
+            ax.annotate(
+                f"x{base / v:.2f}",
+                xy=(bar.get_x() + bar.get_width() / 2, v / 2),
+                ha="center", va="center", fontsize=11, color="#ffffff",
+                fontweight="bold",
+            )
+    ax.set_title("Build time vs robot count — 3D hollow box (40 voxels)",
+                 loc="left", fontsize=12)
+    ax.set_xlabel("robots")
+    ax.set_ylabel("ticks to complete")
+    ax.set_ylim(0, max(values) * 1.12)
+    ax.grid(axis="y", color="#e5e7eb", linewidth=0.8, zorder=0)
+    ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
 
     path = Path(path)

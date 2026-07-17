@@ -34,6 +34,19 @@ class World:
         self.occupancy[rows - 1, :] = GROUND
         self.blueprint = np.zeros((rows, cols), dtype=bool)
 
+    def copy(self) -> "World":
+        """Independent deep copy — scratch worlds for validation/search.
+
+        Lattice-agnostic callers (planner, choreographer) must use this
+        instead of constructing a World from dimensions.
+        """
+        clone = World.__new__(World)
+        clone.rows = self.rows
+        clone.cols = self.cols
+        clone.occupancy = self.occupancy.copy()
+        clone.blueprint = self.blueprint.copy()
+        return clone
+
     # -- blueprint ---------------------------------------------------------
 
     def set_wall_blueprint(self, width: int, height: int, left: int) -> None:

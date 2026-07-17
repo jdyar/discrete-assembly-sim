@@ -23,20 +23,23 @@ between placements:
 ``validate_plan`` independently re-simulates a finished plan against the
 same rules (defense in depth — run it before execution).
 
-The footing/reach rules are injected (defaulting to sim.robot's confirmed
-rules) so rule variants can be evaluated without touching the robot.
+The lattice rules are injected as a :class:`~sim.geometry.Geometry`
+(defaulting to the square lattice) — the planner itself never assumes 2D
+or square-lattice geometry (binding rule, docs/DESIGN.md); all
+lattice knowledge, including candidate-ordering heuristics, lives behind
+the geometry interface.
 """
 
 from __future__ import annotations
 
 from typing import Callable, NamedTuple
 
-from .robot import bfs_path, is_grip, reach_cells
-from .world import EMPTY, GROUND, VOXEL, World
+from .geometry import Geometry, SquareLattice2D, bfs_path
+from .world import EMPTY, VOXEL, World
 
 Cell = tuple[int, int]
 
-ReachFn = Callable[[Cell], list[Cell]]
+GeometryFactory = Callable[[World], Geometry]
 
 
 class Task(NamedTuple):
@@ -50,39 +53,30 @@ class SearchBudgetExceeded(Exception):
     """Search hit max_nodes: feasibility is UNDECIDED, not disproven."""
 
 
-def _approaches_for(target: Cell, reach_fn: ReachFn, world: World) -> list[Cell]:
-    """Footing cells from which ``target`` is within reach, right now."""
-    r, c = target
-    # Scan the full stance neighborhood and invert reach_fn exactly.
-    candidates = [
-        (r + dr, c + dc)
-        for dr in (-1, 0, 1)
-        for dc in (-1, 0, 1)
-        if (dr, dc) != (0, 0)
-    ]
+def _approaches_for(target: Cell, geometry: Geometry) -> list[Cell]:
+    """Footing nodes from which ``target`` is within reach, right now.
+
+    Inverts the reach relation via its symmetry (Geometry contract).
+    """
     return [
         a
-        for a in candidates
-        if is_grip(world, a) and target in reach_fn(a)
+        for a in geometry.reach_cells(target)
+        if geometry.is_footing(a) and target in geometry.reach_cells(a)
     ]
-
-
-def _supported(world: World, cell: Cell) -> bool:
-    r, c = cell
-    return r + 1 < world.rows and world.occupancy[r + 1, c] in (GROUND, VOXEL)
 
 
 def plan_build_order(
     world: World,
     depot: Cell,
-    reach_fn: ReachFn = reach_cells,
+    geometry_factory: GeometryFactory = SquareLattice2D,
     max_nodes: int = 200_000,
 ) -> list[Task] | None:
     """Search for a complete, valid placement order for the blueprint.
 
     Depth-first search over sets of built cells with memoized dead ends.
-    Candidates are tried supported-first (floating placements are legal in
-    the no-gravity world but used only when nothing supported works),
+    Candidate ordering comes from ``geometry.candidate_sort_key`` — for the
+    square lattice: supported-first (floating placements are legal in the
+    no-gravity world but used only when nothing supported works),
     bottom-up, farthest-from-depot first — the order that tends to keep a
     climbable ramp on the depot side.
 
@@ -98,12 +92,16 @@ def plan_build_order(
         # here would be silently treated as built — fail loudly instead.
         raise ValueError("world contains defective voxels; remove before planning")
     remaining = [
-        (int(r), int(c)) for r, c in zip(*world.blueprint.nonzero())
-        if world.occupancy[r, c] == EMPTY
+        idx
+        for idx in (
+            tuple(int(x) for x in nd) for nd in zip(*world.blueprint.nonzero())
+        )
+        if world.occupancy[idx] == EMPTY
     ]
     if not remaining:
         return []
 
+    geometry = geometry_factory(world)
     dead: set[frozenset[Cell]] = set()
     nodes = 0
     plan: list[Task] = []
@@ -122,21 +120,17 @@ def plan_build_order(
 
         candidates: list[tuple[tuple, Cell, Cell]] = []
         for target in remaining:
-            for approach in _approaches_for(target, reach_fn, world):
-                if bfs_path(world, depot, {approach}) is None:
+            for approach in _approaches_for(target, geometry):
+                if bfs_path(geometry, depot, {approach}) is None:
                     continue
-                key = (
-                    not _supported(world, target),  # supported first
-                    -target[0],                     # lower rows first
-                    -abs(target[1] - depot[1]),     # far from depot first
-                )
+                key = geometry.candidate_sort_key(target, depot)
                 candidates.append((key, target, approach))
         candidates.sort(key=lambda x: x[0])
 
         for _key, target, approach in candidates:
             world.occupancy[target] = VOXEL
             # Never strand: the stance must still connect back to the depot.
-            if bfs_path(world, approach, {depot}) is not None:
+            if bfs_path(geometry, approach, {depot}) is not None:
                 plan.append(Task(target, approach))
                 if dfs(remaining - {target}):
                     world.occupancy[target] = EMPTY
@@ -158,7 +152,7 @@ def validate_plan(
     world: World,
     tasks: list[Task],
     depot: Cell,
-    reach_fn: ReachFn = reach_cells,
+    geometry_factory: GeometryFactory = SquareLattice2D,
 ) -> tuple[bool, str]:
     """Re-simulate ``tasks`` against footing/reach/round-trip rules.
 
@@ -166,9 +160,8 @@ def validate_plan(
     depot -> approach path, footing at the approach, target within reach and
     empty, and approach -> depot path after placing. Returns (ok, reason).
     """
-    scratch = World(world.rows, world.cols)
-    scratch.occupancy = world.occupancy.copy()
-    scratch.blueprint = world.blueprint.copy()
+    scratch = world.copy()
+    geometry = geometry_factory(scratch)
 
     for i, (target, approach) in enumerate(tasks):
         label = f"task {i} place {target} from {approach}"
@@ -176,14 +169,14 @@ def validate_plan(
             return False, f"{label}: target not in blueprint"
         if scratch.occupancy[target] != EMPTY:
             return False, f"{label}: target not empty"
-        if not is_grip(scratch, approach):
+        if not geometry.is_footing(approach):
             return False, f"{label}: approach is not a legal grip cell"
-        if target not in reach_fn(approach):
+        if target not in geometry.reach_cells(approach):
             return False, f"{label}: target out of reach"
-        if bfs_path(scratch, depot, {approach}) is None:
+        if bfs_path(geometry, depot, {approach}) is None:
             return False, f"{label}: no path depot->approach"
         scratch.occupancy[target] = VOXEL
-        if bfs_path(scratch, approach, {depot}) is None:
+        if bfs_path(geometry, approach, {depot}) is None:
             return False, f"{label}: robot stranded after placement"
     if not scratch.complete:
         return False, "plan does not complete the blueprint"

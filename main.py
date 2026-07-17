@@ -179,12 +179,160 @@ def yield_experiment(
     return str(chart)
 
 
+def build_swarm_world(cols: int = 14, wall_left: int = 4) -> World:
+    """Wider stage for multi-robot runs: park space on both flanks."""
+    world = World(rows=WORLD_ROWS, cols=cols)
+    world.set_wall_blueprint(width=WALL_WIDTH, height=WALL_HEIGHT, left=wall_left)
+    return world
+
+
+SWARM_STARTS = [(5, 3), (5, 10), (5, 2), (5, 11), (5, 1)]  # alternating flanks
+
+
+def run_swarm_build(
+    world: World,
+    n_robots: int = 2,
+    defect_p: float = 0.0,
+    seed: int | None = None,
+    correction: bool = True,
+    max_ticks: int = 8000,
+    verbose: bool = True,
+):
+    """Slice 3: N robots, shared blueprint, choreographed by reservations."""
+    from sim.swarm import Swarm
+
+    swarm = Swarm(
+        world,
+        DEPOT,
+        starts=SWARM_STARTS[:n_robots],
+        defect_p=defect_p,
+        rng=random.Random(seed),
+        inspect_enabled=correction,
+    )
+    log = RunLog()
+    log.meta.update(
+        depot=list(DEPOT), n_robots=n_robots, defect_p=defect_p,
+        seed=seed, correction=correction,
+    )
+    log.log_tick(0, world, robots=swarm.robots)
+    while not swarm.settled and swarm.tick_count < max_ticks:
+        swarm.tick()
+        log.log_tick(swarm.tick_count, world, robots=swarm.robots)
+    log.meta.update(
+        kickbacks=swarm.kickbacks,
+        defects=swarm.defects_found,
+        places=sum(1 for e in swarm.events if e[2] == "place"),
+    )
+    if verbose:
+        print(render_ascii(world))
+        print(
+            f"\nslice 3 ({n_robots} robots, p={defect_p}, "
+            f"correction={correction}): "
+            f"yield={world.built_count}/{world.blueprint_count} "
+            f"defects={swarm.defects_found} kickbacks={swarm.kickbacks} "
+            f"ticks={swarm.tick_count}"
+        )
+    return log, swarm
+
+
+def build_world3d(levels: int = 5, rows: int = 10, cols: int = 12) -> "World3D":
+    """Slice 4a stage: a hollow 4x4x3 box (walls + roof) mid-field."""
+    from sim.world3d import World3D
+
+    world = World3D(levels, rows, cols)
+    world.set_box_blueprint(width=4, depth=4, height=3, left=4, front=3, hollow=True)
+    return world
+
+
+DEPOT3D = (1, 4, 1)  # ground-level grip cell, left of the box
+SWARM3D_STARTS = [(1, 2, 1), (1, 7, 1), (1, 2, 10), (1, 7, 10), (1, 4, 10)]
+
+
+def run_swarm3d_build(
+    world,
+    n_robots: int = 2,
+    defect_p: float = 0.0,
+    seed: int | None = None,
+    correction: bool = True,
+    max_ticks: int = 20_000,
+    verbose: bool = True,
+):
+    """Slice 4a/4b: N robots, 3D structure, same choreographer."""
+    from sim.geometry3d import CubicLattice3D
+    from sim.render import render_ascii3d
+    from sim.swarm import Swarm
+
+    swarm = Swarm(
+        world,
+        DEPOT3D,
+        starts=SWARM3D_STARTS[:n_robots],
+        defect_p=defect_p,
+        rng=random.Random(seed),
+        inspect_enabled=correction,
+        geometry_factory=CubicLattice3D,
+    )
+    log = RunLog()
+    log.meta.update(
+        depot=list(DEPOT3D), n_robots=n_robots, defect_p=defect_p,
+        seed=seed, correction=correction,
+    )
+    log.log_tick(0, world, robots=swarm.robots)
+    while not swarm.settled and swarm.tick_count < max_ticks:
+        swarm.tick()
+        log.log_tick(swarm.tick_count, world, robots=swarm.robots)
+    log.meta.update(
+        kickbacks=swarm.kickbacks,
+        defects=swarm.defects_found,
+        places=sum(1 for e in swarm.events if e[2] == "place"),
+    )
+    if verbose:
+        print(render_ascii3d(world))
+        print(
+            f"\nslice 4a ({n_robots} robots, 3D box, p={defect_p}, "
+            f"correction={correction}): "
+            f"yield={world.built_count}/{world.blueprint_count} "
+            f"defects={swarm.defects_found} kickbacks={swarm.kickbacks} "
+            f"ticks={swarm.tick_count}"
+        )
+    return log, swarm
+
+
+def speedup3d_experiment(ns: tuple = (1, 2, 3), out: str = "runs/speedup_3d.png"):
+    """Milestone chart: build ticks and speedup vs robot count in 3D."""
+    from sim.metrics import speedup_vs_n_chart
+
+    ticks: dict[int, int] = {}
+    for n in ns:
+        world = build_world3d()
+        _log, swarm = run_swarm3d_build(world, n_robots=n, verbose=False)
+        if not world.complete:
+            raise RuntimeError(f"N={n} did not complete: {world.built_count}")
+        ticks[n] = swarm.tick_count
+        print(f"N={n}: {swarm.tick_count} ticks "
+              f"(speedup x{ticks[list(ticks)[0]] / swarm.tick_count:.2f}, "
+              f"kickbacks={swarm.kickbacks})")
+    chart = speedup_vs_n_chart(ticks, out)
+    print(f"chart: {chart}")
+    return ticks
+
+
 def main() -> None:
     import sys
 
     mode = sys.argv[1] if len(sys.argv) > 1 else "slice2"
     world = build_world()
-    if mode == "slice0":
+    if mode == "swarm3d":
+        n = int(sys.argv[2]) if len(sys.argv) > 2 else 2
+        world = build_world3d()
+        log, _swarm = run_swarm3d_build(world, n_robots=n)
+    elif mode == "speedup3d":
+        speedup3d_experiment()
+        return
+    elif mode == "swarm":
+        n = int(sys.argv[2]) if len(sys.argv) > 2 else 2
+        world = build_swarm_world()
+        log, _swarm = run_swarm_build(world, n_robots=n)
+    elif mode == "slice0":
         log = run(world)
         print(f"\ndone: complete={world.complete}  {log.summary()}")
     elif mode == "slice1":

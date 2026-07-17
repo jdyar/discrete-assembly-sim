@@ -51,7 +51,9 @@ import random
 from collections import deque
 from typing import Iterator
 
-from .world import DEFECT, EMPTY, GROUND, VOXEL, World
+from . import geometry as geometry_mod
+from .geometry import Geometry, SquareLattice2D
+from .world import World
 
 Cell = tuple[int, int]
 
@@ -64,45 +66,20 @@ PLACE = "PLACE"
 INSPECT = "INSPECT"
 REMOVE = "REMOVE"
 
-# A defective voxel is badly bonded but sits in the lattice — crawlable.
-_SOLIDS = (GROUND, VOXEL, DEFECT)
-
-
-def _solid(world: World, cell: Cell) -> bool:
-    r, c = cell
-    return (
-        0 <= r < world.rows
-        and 0 <= c < world.cols
-        and world.occupancy[r, c] in _SOLIDS
-    )
+# Geometry compatibility wrappers. The rules themselves live in
+# sim.geometry.SquareLattice2D (the pluggable lattice seam, Slice 3a);
+# these keep the historical (world, cell) call signature for existing
+# callers and tests. New code should take a Geometry instead.
 
 
 def is_grip(world: World, cell: Cell) -> bool:
     """True if the robot may occupy ``cell``: empty, gripping a solid neighbor."""
-    r, c = cell
-    if not (0 <= r < world.rows and 0 <= c < world.cols):
-        return False
-    if world.occupancy[r, c] != EMPTY:  # DEFECT counts as occupied
-        return False
-    return any(
-        _solid(world, n) for n in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1))
-    )
+    return SquareLattice2D(world).is_footing(cell)
 
 
 def legal_moves(world: World, cell: Cell) -> Iterator[Cell]:
     """Surface-crawl edges: orthogonal along a surface, diagonal at corners."""
-    r, c = cell
-    for nxt in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
-        if is_grip(world, nxt):
-            yield nxt
-    for dr in (-1, 1):
-        for dc in (-1, 1):
-            nxt = (r + dr, c + dc)
-            # Corner rounding: pivot around exactly one solid between-cell.
-            if is_grip(world, nxt) and (
-                _solid(world, (r + dr, c)) != _solid(world, (r, c + dc))
-            ):
-                yield nxt
+    yield from SquareLattice2D(world).neighbors(cell)
 
 
 def reach_cells(cell: Cell) -> list[Cell]:
@@ -122,24 +99,7 @@ def bfs_path(world: World, start: Cell, goals: set[Cell]) -> list[Cell] | None:
     Returns the path including ``start`` and the reached goal, or ``None``
     if no goal is reachable. ``start`` must itself be a legal grip cell.
     """
-    if start in goals:
-        return [start]
-    prev: dict[Cell, Cell] = {start: start}
-    queue: deque[Cell] = deque([start])
-    while queue:
-        cur = queue.popleft()
-        for nxt in legal_moves(world, cur):
-            if nxt in prev:
-                continue
-            prev[nxt] = cur
-            if nxt in goals:
-                path = [nxt]
-                while path[-1] != start:
-                    path.append(prev[path[-1]])
-                path.reverse()
-                return path
-            queue.append(nxt)
-    return None
+    return geometry_mod.bfs_path(SquareLattice2D(world), start, goals)
 
 
 class Robot:
@@ -163,7 +123,11 @@ class Robot:
         defect_p: float = 0.0,
         rng: random.Random | None = None,
         inspect_enabled: bool = True,
+        geometry: Geometry | None = None,
     ):
+        # Lattice rules are injected; None = square lattice built per tick
+        # from the world handed to tick() (keeps the historical call shape).
+        self._geometry = geometry
         self.pos = pos
         self.depot = depot  # grip cell where voxels are picked
         self.state = IDLE
@@ -198,16 +162,20 @@ class Robot:
     def _task_approach(task) -> Cell | None:
         return task.approach if hasattr(task, "approach") else None
 
+    def _geom(self, world: World) -> Geometry:
+        return self._geometry if self._geometry is not None else SquareLattice2D(world)
+
     def _stances(self, world: World, task) -> set[Cell]:
-        """Grip cells this task may be placed from."""
+        """Footing nodes this task may be placed from."""
+        geom = self._geom(world)
         fixed = self._task_approach(task)
         if fixed is not None:
-            return {fixed} if is_grip(world, fixed) else set()
+            return {fixed} if geom.is_footing(fixed) else set()
         target = self._task_cell(task)
         return {
-            cell
-            for cell in reach_cells(target)  # reach is symmetric
-            if is_grip(world, cell)
+            node
+            for node in geom.reach_cells(target)  # reach is symmetric (Geometry contract)
+            if geom.is_footing(node)
         }
 
     def _step_along_path(self) -> None:
@@ -233,7 +201,7 @@ class Robot:
                 self.state = PICK
                 return
             if not self._path:
-                path = bfs_path(world, self.pos, {self.depot})
+                path = geometry_mod.bfs_path(self._geom(world), self.pos, {self.depot})
                 if path is None:
                     self.idle_ticks += 1  # unreachable now; retry next tick
                     return
@@ -253,7 +221,11 @@ class Robot:
                 self.state = PLACE
                 return
             if not self._path or self._path[-1] not in stances:
-                path = bfs_path(world, self.pos, stances) if stances else None
+                path = (
+                    geometry_mod.bfs_path(self._geom(world), self.pos, stances)
+                    if stances
+                    else None
+                )
                 if path is None:
                     self.idle_ticks += 1
                     return

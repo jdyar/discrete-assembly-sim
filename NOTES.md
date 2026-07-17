@@ -2,7 +2,8 @@
 
 Working notes for this simulator: design decisions with their rationale,
 per-slice session history, and the data contracts the code must honor.
-(Slices 0–2 complete; Slices 3–5 are roadmap — see README.)
+(Slices 0–2 and the multi-robot choreographer complete; 3D multi-robot
+choreography is the active slice — see README.)
 
 ## North star
 
@@ -62,7 +63,63 @@ robot descends the face at the end (never stranded). Machine-verified
 before adoption; the footing/reach rule functions are injectable in the
 planner so rule variants can be evaluated without touching the robot.
 
+## Architecture decision — 3D-first pivot (decided 2026-07-15)
+
+2D multi-robot coordination was measured degenerate and dropped, not
+fixed. Evidence: (a) a 2-robot 2D wall build took exactly the ticks of a
+1-robot build (406 = 406) — the second robot starved with 117 task
+kickbacks and zero placements, because a 2D wall build is a single-file
+corridor with the depot at one end (the known MAPF 1-wide-corridor
+pathology, Stern et al. arXiv:1906.08291); (b) a pencil-and-paper
+two-depot variant forces non-crossing robots into staircase-shaped
+intermediate structures that grow beyond the blueprint footprint —
+worse than one robot. No practical discrete-assembly system targets 2D
+structures. The 2D sim stays as the regression base; the active build is
+3D (cubic voxel grid — see docs/DESIGN.md, lattice decisions).
+
+Same decision set (2026-07-16): reach articulation for radius > 1 is
+**snake arm** (empty-cell path within the ball, never through solids);
+the cubic voxel grid is confirmed over strut-level cuboct geometry.
+
 ## Session log
+
+### 2026-07-15 — 3D slice: world + geometry + traps + first real speedup
+3D trap fixtures authored spec-first (tomb trap, tunnel standoff,
+backfill trap — each grounded in a published failure class, reasoning in
+docstrings), then World3D + CubicLattice3D + MotionModel(reach_radius)
+behind the unchanged geometry interface. The coordination stack —
+sequencer, choreographer, reservation table, time-expanded A* — ran on
+3D nodes with ZERO logic changes; the spec-first fixtures caught exactly
+two latent 2D-factory defaults (a default geometry_factory in
+Sequencer.resequence and in the buildability gate — the latter's crash
+was silently swallowed by its defect-guard except clause, refusing every
+3D placement; Geometry.bound_factory() is the fix). Demo: hollow 4x4x3
+box (40 voxels): 1 robot 472 ticks, 2 robots 278 (x1.70), 3 robots 211
+(x2.24) — versus x1.00 in 2D with the same coordination code
+(docs/speedup_3d.png). Zero collisions, zero deadlocks; run-log contract
+v3 (3D occupancy + levels meta); the Three.js viewer renders v1/v2/v3.
+82 tests green (2D suite untouched).
+
+### 2026-07-14 — multi-robot choreographer (2D) + trap fixtures
+Cooperative A* over a time-expanded graph against a shared reservation
+table (lease = movement, deed = placement — an implementation note
+within the published ARMADAS reservation framework, see
+docs/DESIGN.md, Provenance). Placement gates: connectivity (no
+placement may disconnect any robot's committed future from the depot,
+proven on the permanent future graph) and buildability (the remaining
+blueprint must stay completable). Sequencer<->choreographer are coupled
+(kickback + receding horizon), not pipelined. Adversarial fixtures
+authored spec-first before the swarm existed: pocket trap, corridor
+standoff, repair-in-a-crowd — all green, plus the fixture-revision
+history (what each trap caught) recorded in tests/test_traps.py.
+
+### 2026-07-13 — geometry seam + reservation structures
+Geometry interface extracted (neighbors/is_footing/reach_cells +
+heuristic hooks); the 2D BILL-E rules moved verbatim behind it; all
+prior tests unchanged. Clean-room reservation table (leases with
+swap-safe undirected edges, deeds permanent from commit tick,
+release_owner as the replan primitive) + time-expanded graph. A
+string-node triangle-lattice fake in the tests proves no 2D assumptions.
 
 ### 2026-07-10 — packaging pass (public release)
 Packaging only, no feature changes: MIT LICENSE + per-file header notices;
