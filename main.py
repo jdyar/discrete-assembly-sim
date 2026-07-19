@@ -256,6 +256,7 @@ def run_swarm3d_build(
     correction: bool = True,
     max_ticks: int = 20_000,
     verbose: bool = True,
+    geometry_factory=None,
 ):
     """Slice 4a/4b: N robots, 3D structure, same choreographer."""
     from sim.geometry3d import CubicLattice3D
@@ -269,7 +270,7 @@ def run_swarm3d_build(
         defect_p=defect_p,
         rng=random.Random(seed),
         inspect_enabled=correction,
-        geometry_factory=CubicLattice3D,
+        geometry_factory=geometry_factory or CubicLattice3D,
     )
     log = RunLog()
     log.meta.update(
@@ -297,21 +298,52 @@ def run_swarm3d_build(
     return log, swarm
 
 
-def speedup3d_experiment(ns: tuple = (1, 2, 3), out: str = "runs/speedup_3d.png"):
-    """Milestone chart: build ticks and speedup vs robot count in 3D."""
+def speedup3d_experiment(
+    ns: tuple = (1, 2, 3, 4, 5), out: str = "runs/speedup_3d.png"
+):
+    """Milestone chart: build ticks and speedup vs robot count in 3D.
+    The congestion knee is where marginal speedup collapses."""
     from sim.metrics import speedup_vs_n_chart
 
     ticks: dict[int, int] = {}
+    prev = None
     for n in ns:
         world = build_world3d()
         _log, swarm = run_swarm3d_build(world, n_robots=n, verbose=False)
         if not world.complete:
             raise RuntimeError(f"N={n} did not complete: {world.built_count}")
         ticks[n] = swarm.tick_count
+        marginal = f" marginal x{prev / swarm.tick_count:.2f}" if prev else ""
+        prev = swarm.tick_count
         print(f"N={n}: {swarm.tick_count} ticks "
               f"(speedup x{ticks[list(ticks)[0]] / swarm.tick_count:.2f}, "
-              f"kickbacks={swarm.kickbacks})")
+              f"kickbacks={swarm.kickbacks}){marginal}")
     chart = speedup_vs_n_chart(ticks, out)
+    print(f"chart: {chart}")
+    return ticks
+
+
+def reach3d_experiment(
+    radii: tuple = (1, 2, 3, 4), out: str = "runs/ticks_vs_reach.png"
+):
+    """Slice 4c chart: same blueprint, same coordination code, reach as
+    config — build ticks vs reach radius (2 robots, 3D box)."""
+    from sim.geometry3d import CubicLattice3D, MotionModel
+    from sim.metrics import ticks_vs_reach_chart
+
+    ticks: dict[int, int] = {}
+    for radius in radii:
+        world = build_world3d()
+        factory = lambda w, _r=radius: CubicLattice3D(w, MotionModel(_r))
+        _log, swarm = run_swarm3d_build(
+            world, n_robots=2, verbose=False, geometry_factory=factory
+        )
+        if not world.complete:
+            raise RuntimeError(f"reach={radius} did not complete")
+        ticks[radius] = swarm.tick_count
+        print(f"reach={radius}: {swarm.tick_count} ticks "
+              f"(kickbacks={swarm.kickbacks})")
+    chart = ticks_vs_reach_chart(ticks, out)
     print(f"chart: {chart}")
     return ticks
 
@@ -327,6 +359,9 @@ def main() -> None:
         log, _swarm = run_swarm3d_build(world, n_robots=n)
     elif mode == "speedup3d":
         speedup3d_experiment()
+        return
+    elif mode == "reach3d":
+        reach3d_experiment()
         return
     elif mode == "swarm":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 2

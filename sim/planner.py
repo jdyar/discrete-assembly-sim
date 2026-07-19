@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from typing import Callable, NamedTuple
 
-from .geometry import Geometry, SquareLattice2D, bfs_path
+from .geometry import Geometry, SquareLattice2D, bfs_path, bfs_reachable
 from .world import EMPTY, VOXEL, World
 
 Cell = tuple[int, int]
@@ -118,10 +118,11 @@ def plan_build_order(
                 f"no order found within {max_nodes} nodes; feasibility undecided"
             )
 
+        reachable = bfs_reachable(geometry, depot)  # one BFS per world state
         candidates: list[tuple[tuple, Cell, Cell]] = []
         for target in remaining:
             for approach in _approaches_for(target, geometry):
-                if bfs_path(geometry, depot, {approach}) is None:
+                if approach not in reachable:
                     continue
                 key = geometry.candidate_sort_key(target, depot)
                 candidates.append((key, target, approach))

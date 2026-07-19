@@ -562,11 +562,21 @@ class Swarm:
             raise AssertionError(f"unknown action {step.action}")
 
     def _abort(self, r: SwarmRobot) -> None:
-        """Plan invalidated mid-flight: release, kick the task back, hold."""
+        """Plan invalidated mid-flight: release, kick the task back, hold.
+
+        The hold is BEST-EFFORT: an aborting robot may be standing on a
+        cell someone else's lease already crosses inside the horizon (a
+        strict hold here crashed the N=4 speedup run). A partial hold
+        marks must_move — the standard displacement path escapes it
+        before the inbound lease arrives.
+        """
         t = self.tick_count
         r.itinerary = []
         self.table.release_owner(r.id, t + 1)
-        self.table.reserve_hold(r.id, r.pos, t + 1, t + 1 + HOLD_HORIZON)
+        held_to = self.table.reserve_hold_best_effort(
+            r.id, r.pos, t + 1, t + 1 + HOLD_HORIZON
+        )
+        r.must_move = held_to < t + 1 + HOLD_HORIZON
         if r.task is not None:
             retracted = r.task
             # Retract the deed only if the voxel was never placed (aborts

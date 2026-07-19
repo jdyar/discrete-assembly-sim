@@ -12,9 +12,9 @@ Small "relative robots" (MIT BILL-E / NASA ARMADAS lineage) crawl on the voxel s
 
 The same coordination code that manages **zero speedup in 2D** (a wall build is a single-file corridor — the second robot starves) gets **real parallelism in 3D**, because the structure's surface gives robots room to route around each other:
 
-![Build time vs robot count on a 3D hollow box: 472 ticks alone, ×1.70 with two robots, ×2.24 with three](docs/speedup_3d.png)
+![Build time vs robot count on a 3D hollow box: 472 ticks alone, ×2.81 with five robots, congestion knee at four](docs/speedup_3d.png)
 
-Zero collisions, zero deadlocks, roof placed last so nobody gets sealed inside. Reproduce with `python main.py speedup3d`.
+Zero collisions, zero deadlocks, roof placed last so nobody gets sealed inside — and the chart shows the honest part too: the **congestion knee**. On this 40-voxel box the fifth robot buys only ×1.05 marginal speedup; contention for stances and the depot becomes the binding constraint. Reproduce with `python main.py speedup3d`.
 
 ## Error correction makes yield digital
 
@@ -35,12 +35,13 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 python main.py swarm3d 2      # 2 robots build a 3D hollow box -> runs/latest.json
-python main.py speedup3d      # the speedup-vs-N experiment -> runs/speedup_3d.png
+python main.py speedup3d      # speedup-vs-N (1..5) experiment -> runs/speedup_3d.png
+python main.py reach3d        # build ticks vs reach radius -> runs/ticks_vs_reach.png
 python main.py swarm 2        # 2 robots, 2D wall (the degenerate case, kept honest)
 python main.py                # single robot, defects + repair (the yield demo)
 python main.py yield          # the yield-vs-p experiment -> runs/yield_vs_p.png
 
-python -m unittest            # 82 tests, including the adversarial trap suite
+python -m unittest            # 88 tests: traps, 3D repair, fuzzed coupled loop
 ```
 
 **Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run.
@@ -50,9 +51,13 @@ python -m unittest            # 82 tests, including the adversarial trap suite
 The design bet of this repo: **coordination logic is invariant to robot hardware.** Everything your robot *is* lives behind two small seams, and the choreographer never looks past them:
 
 - **`Geometry`** (`sim/geometry.py`) — what a lattice is: `neighbors(node)`, `is_footing(node)`, `reach_cells(node)`. Nodes are opaque values; the 2D square lattice and the 3D cubic lattice are both ~150-line implementations, and the test suite includes a string-node triangle-lattice fake to prove nothing upstream assumes coordinates.
-- **`MotionModel`** (`sim/geometry3d.py`) — what your robot can do: today `reach_radius` (place a block up to N cells away, like SOLL-E-class strides and arms); next on the roadmap: climb limit, multi-cell inchworm steps, and two robots coupling into a longer arm (BILL-E cooperative manipulation lineage).
+- **`MotionModel`** (`sim/geometry3d.py`) — what your robot can do: today `reach_radius` with **snake-arm articulation** — a target is reachable iff an empty-cell path of length ≤ radius runs from stance to target, so the arm bends around corners and over ledges but never through solid volume (matching real lattice-robot arms). Next on the roadmap: climb limit, multi-cell inchworm steps, and two robots coupling into a longer arm (BILL-E cooperative manipulation lineage).
 
-If your lab's robot climbs exactly one block (TERMES-style), that's config. If it places four cells away around a corner, that's config. The sequencer, reservation table, connectivity gates, and repair loop don't change — that invariance is tested, not aspirational: the 3D pivot ran the entire coordination stack on a new lattice with zero logic changes.
+If your lab's robot climbs exactly one block (TERMES-style), that's config. If it places four cells away around a corner, that's config — and here's what turning that one knob does, with zero coordination changes:
+
+![Build time vs placement reach: 278 ticks at reach 1, 159 at reach 4 — same coordination code](docs/ticks_vs_reach.png)
+
+The sequencer, reservation table, connectivity gates, and repair loop don't change — that invariance is tested, not aspirational: the 3D pivot ran the entire coordination stack on a new lattice with zero logic changes, and the reach experiment (`python main.py reach3d`) re-runs the same build at radii 1–4 through the same planner.
 
 The **trap fixtures** (`tests/test_traps.py`, `tests/test_traps3d.py`) double as a benchmark: each one encodes a published failure class — TERMES-style enclosure deadlocks, MAPF corridor swaps, single-path interiors — with the reasoning in its docstring. If you're building your own planner, point it at these.
 
@@ -97,9 +102,11 @@ Built in vertical slices — every milestone is a running end-to-end program wit
 - ✅ World, blueprint, single robot, validated build orders (6×4 wall)
 - ✅ Error correction: inspect / remove / replan, ≥99% yield at p = 0.08
 - ✅ Multi-robot choreographer: reservations, gates, adversarial trap suite (2D)
-- ✅ 3D: cubic lattice behind the same interface, first real speedup (×2.24 @ 3 robots)
-- ⏳ 3D at scale: fuzzed coordination, congestion knee (speedup-vs-N to 5+), mid-swarm repair in 3D
-- ⏳ Motion-model realism: reach ≈ 4 with snake-arm articulation, climb limits, coupled-robot extended reach — all as config, with the coordination logic provably unchanged
+- ✅ 3D: cubic lattice behind the same interface, first real speedup
+- ✅ 3D at scale: fuzzed coupled loop (40-case campaign clean), mid-swarm repair in 3D, speedup-vs-N to 5 with the congestion knee identified (N≈4 on the 40-voxel box)
+- ✅ Snake-arm reach as config (radii 1–4 through the unchanged planner; ×1.75 at reach 4)
+- ⏳ Motion-model remainder: multi-cell stride, climb limit, coupled-robot extended reach
+- ⏳ Yield-vs-p at N in 3D; congestion knee vs structure size
 - ⏳ Typed part families; gravity + structural checks on partial builds
 
 ## Contributing & feedback

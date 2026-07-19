@@ -83,6 +83,25 @@ the cubic voxel grid is confirmed over strut-level cuboct geometry.
 
 ## Session log
 
+### 2026-07-19 — 3D at scale: perf 28x, fuzz, repair, snake-arm reach
+(1) Profiled the 2-robot 3D build at 512s wall — 94% in the
+buildability gate re-running the build-order search per placement.
+Two semantics-preserving fixes (identical tick-for-tick run):
+one depot-reachable-set BFS per world state instead of one BFS per
+candidate stance, and a gate memo keyed on (occupancy, projected
+solids, remaining). 512s -> 18s. (2) Snake-arm reach implemented:
+radius > 1 is a BFS whose intermediate cells must be empty — around
+corners, never through solids; symmetric at every radius; radius 1
+reduces exactly to the 26-shell. (3) Repair-in-a-crowd-3D green
+(defect mid-swarm, repair through live reservations, liveness proven)
++ a fuzz harness (randomized boxes x hollow x robots x defects x
+reach; 40-case campaign clean). (4) Scaling to N=4 exposed a real
+bug: an aborting robot re-pinned its cell with a STRICT hold and
+crashed when another robot's lease already crossed that cell — now a
+best-effort hold + displacement flag, consistent with the rest of the
+loop. (5) Charts: speedup N=1..5 (x2.81, knee at N~4) and ticks vs
+reach radius (x1.75 at reach 4, coordination unchanged). 88 tests.
+
 ### 2026-07-15 — 3D slice: world + geometry + traps + first real speedup
 3D trap fixtures authored spec-first (tomb trap, tunnel standoff,
 backfill trap — each grounded in a published failure class, reasoning in

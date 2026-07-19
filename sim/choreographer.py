@@ -50,6 +50,12 @@ REMOVE = "REMOVE"
 MAX_HORIZON = 256  # ticks a single task plan may look ahead
 PARK_TICKS = 16  # trailing hold at a plan's end node (renewed by the swarm)
 
+# buildability_gate memo: (occupancy bytes, projected solids, remaining)
+# -> verdict. Bounded; cleared wholesale at capacity (keys die naturally
+# as the world changes, so eviction sophistication buys nothing).
+_BUILDABILITY_CACHE: dict = {}
+_BUILDABILITY_CACHE_MAX = 4096
+
 
 class Step(NamedTuple):
     """One scheduled action: be at ``node`` during tick ``t`` doing ``action``.
@@ -187,17 +193,29 @@ def buildability_gate(
         geometry.heuristic_distance(proposed_target, c) > 3 for c in remaining
     ):
         return True
-    solids = reservations.permanent_nodes_at(10**9) | {proposed_target}
+    solids = frozenset(reservations.permanent_nodes_at(10**9)) | {proposed_target}
+    # The verdict depends only on (world occupancy, projected solids,
+    # remaining cells) — memoized because kickback retries and sibling
+    # robots re-ask the identical question many times per world state
+    # (profiled: this probe was ~94% of a 3D build's wall clock).
+    key = (geometry.world.occupancy.tobytes(), solids, frozenset(remaining))
+    if key in _BUILDABILITY_CACHE:
+        return _BUILDABILITY_CACHE[key]
     future = geometry.future_view(solids)
     try:
         order = plan_build_order(
             future.world, depot, geometry.bound_factory(), max_nodes=20_000
         )
+        verdict = order is not None
     except (SearchBudgetExceeded, ValueError):
         # Budget blown, or a defect is transiently in the world (between
         # PLACE and REMOVE): refuse now, retry when things settle.
+        # Budget verdicts are NOT cached — a retry may succeed later.
         return False
-    return order is not None
+    if len(_BUILDABILITY_CACHE) >= _BUILDABILITY_CACHE_MAX:
+        _BUILDABILITY_CACHE.clear()
+    _BUILDABILITY_CACHE[key] = verdict
+    return verdict
 
 
 def _path_to_steps(path: list[TENode]) -> list[Step]:

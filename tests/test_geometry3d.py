@@ -93,13 +93,9 @@ class TestReach(unittest.TestCase):
             self.assertIn(a, geom.reach_cells(b))
 
     def test_extended_reach_widens_the_stance_set(self):
-        """Slice 4c grounding: a larger radius yields a strict SUPERSET
-        of placement stances, including stances a full gap away from the
-        target — the geometric fact that lets extended-reach robots keep
-        working from uncongested cells. (Whether reach may pass THROUGH
-        solid volume — vs articulate around corners — is an explicit 4c
-        modeling decision, flagged in sim/geometry3d.py; radius 1 matches
-        the machine-verified 2D convention exactly.)"""
+        """A larger radius yields a strict superset of placement stances,
+        including stances a full gap away from the target — extended-
+        reach robots can keep working from uncongested cells."""
         world = World3D(4, 5, 8)
         target = (1, 2, 4)
 
@@ -114,6 +110,60 @@ class TestReach(unittest.TestCase):
         self.assertTrue(r1 < r2)  # strict superset
         self.assertIn((1, 2, 2), r2)     # places across the gap at (1,2,3)
         self.assertNotIn((1, 2, 2), r1)
+
+    def test_snake_arm_never_reaches_through_walls(self):
+        """The 4c articulation rule (snake arm, Joshua 2026-07-16): a
+        solid wall between stance and target blocks reach even when the
+        target is within the Chebyshev ball. The naive-ball placeholder
+        failed exactly this."""
+        world = World3D(5, 5, 5)
+        stance = (1, 2, 1)
+        target = (1, 2, 3)
+        # Full wall in the col=2 plane between them, sealed overhead at
+        # both flanking columns so no 2-step path can arc over it.
+        for lvl in (1, 2):
+            for row in range(5):
+                world.place_voxel((lvl, row, 2))
+        for row in range(5):
+            world.place_voxel((3, row, 1))
+            world.place_voxel((3, row, 3))
+        geom = CubicLattice3D(world, MotionModel(reach_radius=2))
+        self.assertNotIn(target, geom.reach_cells(stance))
+
+    def test_snake_arm_articulates_around_a_corner(self):
+        """Same distance, but with an opening: the arm snakes through
+        the gap and reaches a target that is NOT in line of sight —
+        the observed behavior of real lattice-robot arms."""
+        world = World3D(5, 5, 5)
+        stance = (1, 2, 1)
+        target = (2, 2, 2)  # atop the wall: around the top edge
+        world.place_voxel((1, 2, 2))  # a single block between them
+        geom = CubicLattice3D(world, MotionModel(reach_radius=2))
+        self.assertIn(target, geom.reach_cells(stance))
+
+    def test_snake_arm_symmetry_with_solid_target(self):
+        """Stance inversion needs symmetry even when the target is a
+        placed voxel (inspect/remove): endpoints are exempt from the
+        empty-intermediate rule, so the reversed path is identical."""
+        world = World3D(5, 6, 6)
+        target = (1, 2, 3)
+        world.place_voxel(target)
+        geom = CubicLattice3D(world, MotionModel(reach_radius=3))
+        stance = (1, 2, 1)  # two empty steps away
+        self.assertIn(target, geom.reach_cells(stance))
+        self.assertIn(stance, geom.reach_cells(target))
+
+    def test_full_build_with_extended_reach(self):
+        """The invariance claim, executed: reach_radius=2 is pure config —
+        the planner and validator run unchanged and the build completes."""
+        world = World3D(4, 6, 6)
+        world.set_box_blueprint(width=3, depth=3, height=2, left=2, front=2)
+        depot = (1, 0, 0)
+        factory = lambda w: CubicLattice3D(w, MotionModel(reach_radius=2))
+        plan = plan_build_order(world, depot, factory)
+        self.assertIsNotNone(plan)
+        ok, why = validate_plan(world, plan, depot, factory)
+        self.assertTrue(ok, why)
 
 
 class TestPlannerOn3D(unittest.TestCase):

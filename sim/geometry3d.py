@@ -24,15 +24,18 @@ CONFIG on this geometry, never choreographer changes:
   coupled-robot extended reach (two robots attached = one stance with a
   larger radius).
 
-DECIDED (Joshua, 2026-07-16): the articulation rule for radius > 1 is
-**snake arm** — a target is reachable iff an empty-cell path of length
-<= reach_radius exists from the stance to the target within the ball
-(the arm articulates around corners and over ledges, matching the
-observed behavior of BILL-E/SOLL-E-class arms; never through solid
-volume). Implementation lands with Slice 4c; radius 1 is already
-equivalent under either rule. The naive Chebyshev ball below is the
-radius-1-correct placeholder until then. Also decided 2026-07-16: the
-cubic voxel grid stands (see world3d.py docstring).
+Articulation rule (decided by Joshua 2026-07-16, implemented Slice 4c):
+**snake arm** — a target is reachable iff a path of Chebyshev steps of
+length <= reach_radius runs from the stance to the target whose
+INTERMEDIATE cells are all empty (endpoints exempt: the stance is the
+robot's cell; the target may be solid, for inspect/remove). The arm
+articulates around corners and over ledges, matching observed
+BILL-E/SOLL-E-class arm behavior; it never passes through solid volume.
+At radius 1 there are no intermediates, so the rule reduces exactly to
+the 26-cell shell — the machine-verified 2D convention lifted to 3D.
+The relation is symmetric (the same path reversed), preserving the
+planner's stance-inversion contract at every radius.
+Also decided 2026-07-16: the cubic voxel grid stands (see world3d.py).
 """
 
 from __future__ import annotations
@@ -131,13 +134,38 @@ class CubicLattice3D(Geometry):
                         yield nxt
 
     def reach_cells(self, node) -> list[Node]:
-        l, r, c = node
+        """Snake-arm reach: BFS over Chebyshev steps from ``node``,
+        depth <= reach_radius, where every intermediate cell must be
+        empty. Every cell one step off the empty-path tree is a target
+        (solid targets allowed — that is how inspect/remove reach a
+        placed voxel). At radius 1 this is exactly the 26-cell shell.
+        """
         R = self.motion.reach_radius
-        return [
-            (l + dl, r + dr, c + dc)
-            for dl, dr, dc in product(range(-R, R + 1), repeat=3)
-            if (dl, dr, dc) != (0, 0, 0)
-        ]
+        l0, r0, c0 = node
+        steps = [d for d in product((-1, 0, 1), repeat=3) if d != (0, 0, 0)]
+        if R == 1:
+            return [(l0 + dl, r0 + dr, c0 + dc) for dl, dr, dc in steps]
+        seen_empty = {node}  # cells the arm may pass THROUGH
+        frontier = [node]
+        targets: set[Node] = set()
+        for _depth in range(R):
+            nxt = []
+            for l, r, c in frontier:
+                for dl, dr, dc in steps:
+                    cell = (l + dl, r + dr, c + dc)
+                    if cell == node or cell in targets:
+                        continue
+                    targets.add(cell)
+                    # Only empty in-bounds cells extend the arm's path.
+                    if (
+                        cell not in seen_empty
+                        and self._in_bounds(cell)
+                        and self.world.occupancy[cell] == EMPTY
+                    ):
+                        seen_empty.add(cell)
+                        nxt.append(cell)
+            frontier = nxt
+        return list(targets)
 
     def candidate_sort_key(self, target, depot) -> tuple:
         # Supported-first (nothing floats unless it must), bottom-up,

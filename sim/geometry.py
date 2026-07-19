@@ -124,6 +124,27 @@ def bfs_path(
     return None
 
 
+def bfs_reachable(geometry: Geometry, start: Node) -> set:
+    """All footing nodes reachable from ``start`` (BFS over neighbors).
+
+    Membership in the result is equivalent to ``bfs_path(geometry, start,
+    {node}) is not None`` — computed once instead of per-goal (the
+    planner's candidate loop was profiled at ~93k per-goal BFS runs per
+    3D build; one reachable-set per world state replaces them all).
+    """
+    seen = {start}
+    frontier = [start]
+    while frontier:
+        nxt = []
+        for node in frontier:
+            for nb in geometry.neighbors(node):
+                if nb not in seen:
+                    seen.add(nb)
+                    nxt.append(nb)
+        frontier = nxt
+    return seen
+
+
 class SquareLattice2D(Geometry):
     """The 2D square lattice under BILL-E surface-locomotion rules.
 

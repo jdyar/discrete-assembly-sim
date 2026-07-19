@@ -305,6 +305,42 @@ def speedup_vs_n_chart(ticks: dict[int, int], path: str | Path) -> Path:
     return path
 
 
+def ticks_vs_reach_chart(ticks: dict[int, int], path: str | Path) -> Path:
+    """Slice 4c chart: build ticks vs reach radius, same blueprint, same
+    coordination code — the motion-model-as-config claim in one figure."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    radii = sorted(ticks)
+    values = [ticks[r] for r in radii]
+
+    fig, ax = plt.subplots(figsize=(6.4, 4.2))
+    bars = ax.bar([str(r) for r in radii], values, width=0.62,
+                  color="#2563eb", zorder=3)
+    for bar, v in zip(bars, values):
+        ax.annotate(f"{v}", xy=(bar.get_x() + bar.get_width() / 2, v),
+                    xytext=(0, 4), textcoords="offset points",
+                    ha="center", va="bottom", fontsize=9, color="#374151")
+    ax.set_title(
+        "Build time vs placement reach — same coordination code, reach as config",
+        loc="left", fontsize=11,
+    )
+    ax.set_xlabel("reach radius (snake-arm, voxels)")
+    ax.set_ylabel("ticks to complete (2 robots)")
+    ax.set_ylim(0, max(values) * 1.12)
+    ax.grid(axis="y", color="#e5e7eb", linewidth=0.8, zorder=0)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
 def ticks_per_voxel_chart(log: RunLog, path: str | Path) -> Path:
     """Bar chart of ticks spent per voxel over the build, saved as PNG.
 

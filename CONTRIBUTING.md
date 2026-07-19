@@ -48,11 +48,21 @@ No build step, no linter config to fight. Python 3.10+.
 - **A new `Geometry`**: hex lattice, cuboct strut-level, your lab's
   lattice. The triangle-lattice fake in `tests/test_reservations.py`
   shows the minimum contract; ~150 lines gets you a real one.
-- **Performance**: the buildability gate re-runs the build-order search
-  per gated placement — profiled hot path, memoization and incremental
-  connectivity (union-find) are both open ideas.
-- **Congestion experiments**: extend `speedup3d` past N=3, find the
-  knee, chart it.
+- **Run-log → USD / Isaac Sim exporter** (community-requested): the
+  replayable JSON log (contract in `sim/metrics.py`) has everything a
+  physics-fidelity replay needs — world dims, per-tick occupancy, and
+  per-robot position/state/carry. An exporter that emits USD (or drives
+  Isaac Sim directly) would let anyone validate our itineraries against
+  articulated robot models, without touching coordination internals.
+  This is deliberately downstream: the core stays pure-Python and the
+  discrete layer stays the source of truth.
+- **Performance**: the gate memo + reachable-set BFS bought 28×
+  (512s → 18s on the 2-robot box); incremental connectivity
+  (union-find) instead of re-search is the next open idea, and big
+  blueprints will eventually want hierarchical sequencing.
+- **Congestion experiments**: the knee is at N≈4 for the 40-voxel box —
+  how does it move with structure size and depot count? One chart per
+  question.
 - **Viewer**: camera presets, per-robot trails, reservation-table
   overlay (show leases as ghosts through time).
 
