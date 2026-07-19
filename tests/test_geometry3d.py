@@ -166,6 +166,86 @@ class TestReach(unittest.TestCase):
         self.assertTrue(ok, why)
 
 
+class TestMotionConfig(unittest.TestCase):
+    """Slice 4c: stride, climb, and coupled reach are config, and the
+    stride footprint keeps multi-cell moves reservation-sound."""
+
+    def test_climb_zero_grounds_the_robot(self):
+        """climb=0 = gantry/rover class: never leaves its level."""
+        world = World3D(4, 4, 6)
+        world.place_voxel((1, 1, 2))  # a block it could otherwise mount
+        geom = CubicLattice3D(world, MotionModel(climb=0))
+        for nxt in geom.neighbors((1, 1, 1)):
+            self.assertEqual(nxt[0], 1, f"climbed to {nxt}")
+        free = CubicLattice3D(world, MotionModel(climb=1))
+        self.assertIn((2, 1, 2), set(free.neighbors((1, 1, 1))))
+
+    def test_stride_two_covers_two_cells_per_tick(self):
+        world = World3D(3, 4, 8)
+        geom = CubicLattice3D(world, MotionModel(stride=2))
+        nbrs = set(geom.neighbors((1, 1, 1)))
+        self.assertIn((1, 1, 3), nbrs)   # two straight steps, one tick
+        self.assertIn((1, 3, 1), nbrs)
+        self.assertNotIn((1, 1, 4), nbrs)  # three cells: out of stride
+
+    def test_stride_footprint_reports_swept_intermediate(self):
+        world = World3D(3, 4, 8)
+        geom = CubicLattice3D(world, MotionModel(stride=2))
+        self.assertEqual(geom.move_footprint((1, 1, 1), (1, 1, 3)), ((1, 1, 2),))
+        self.assertEqual(geom.move_footprint((1, 1, 1), (1, 1, 2)), ())
+
+    def test_stride_moves_are_reservation_gated_through_swept_cells(self):
+        """A stride move is refused when another robot holds the swept
+        middle cell during the transition window — the crossing-safety
+        property that makes stride sound (not just fast)."""
+        from sim.reservations import ReservationTable
+        from sim.texgraph import TENode, TimeExpandedGraph
+
+        world = World3D(3, 4, 8)
+        geom = CubicLattice3D(world, MotionModel(stride=2))
+        table = ReservationTable()
+        graph = TimeExpandedGraph(geom, table, owner="A")
+        start = TENode((1, 1, 1), 0)
+        self.assertIn(TENode((1, 1, 3), 1), set(graph.successors(start)))
+        table.reserve_hold("B", (1, 1, 2), 0, 1)  # B occupies the middle
+        succ = set(graph.successors(start))
+        self.assertNotIn(TENode((1, 1, 3), 1), succ)  # sweep refused
+        self.assertNotIn(TENode((1, 1, 2), 1), succ)  # and the cell itself
+
+    def test_heuristic_stays_admissible_under_stride(self):
+        world = World3D(3, 6, 10)
+        geom = CubicLattice3D(world, MotionModel(stride=3))
+        # 7 columns apart: at 3 cells/tick that is >= 3 ticks, and the
+        # heuristic must not claim more than the true minimum.
+        self.assertEqual(geom.heuristic_distance((1, 1, 1), (1, 1, 8)), 3)
+
+    def test_coupled_pair_combines_reach_and_takes_min_stride(self):
+        a = MotionModel(reach_radius=2, stride=2, climb=1)
+        b = MotionModel(reach_radius=1, stride=1, climb=1)
+        pair = a.coupled(b)
+        self.assertEqual(pair.reach_radius, 3)
+        self.assertEqual(pair.stride, 1)
+        world = World3D(4, 6, 8)
+        target = (1, 2, 5)
+        solo = CubicLattice3D(world, a)
+        coupled = CubicLattice3D(world, pair)
+        stance = (1, 2, 2)  # three empty steps from the target
+        self.assertNotIn(target, solo.reach_cells(stance))
+        self.assertIn(target, coupled.reach_cells(stance))
+
+    def test_full_build_with_stride_two(self):
+        """Stride is config: the unchanged planner + validator complete
+        a box with a stride-2 robot."""
+        world = World3D(4, 6, 6)
+        world.set_box_blueprint(width=3, depth=3, height=2, left=2, front=2)
+        depot = (1, 0, 0)
+        factory = lambda w: CubicLattice3D(w, MotionModel(stride=2))
+        plan = plan_build_order(world, depot, factory)
+        self.assertIsNotNone(plan)
+        ok, why = validate_plan(world, plan, depot, factory)
+        self.assertTrue(ok, why)
+
+
 class TestPlannerOn3D(unittest.TestCase):
     def test_single_robot_builds_a_box_end_to_end(self):
         """plan_build_order + validate_plan run unchanged on 3D nodes:

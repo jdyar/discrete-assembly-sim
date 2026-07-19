@@ -218,6 +218,22 @@ def buildability_gate(
     return verdict
 
 
+def _reserve_leg(
+    owner: OwnerId,
+    leg: list[TENode],
+    table: ReservationTable,
+    geometry: Geometry,
+) -> None:
+    """Lease a leg: node-per-tick + edges (reserve_path), plus every
+    swept intermediate of multi-cell strides for the transition window
+    (both ticks — matching the time-expanded graph's gating exactly)."""
+    table.reserve_path(owner, [s.node for s in leg], leg[0].t)
+    for prev, cur in zip(leg, leg[1:]):
+        if cur.node != prev.node:
+            for c in geometry.move_footprint(prev.node, cur.node):
+                table.reserve_hold(owner, c, prev.t, cur.t)
+
+
 def _path_to_steps(path: list[TENode]) -> list[Step]:
     """Convert an A* (node, t) path (excluding its start state) to steps."""
     steps: list[Step] = []
@@ -291,9 +307,9 @@ def plan_task(
     # next plan, so that occupancy must be visible to everyone else's A*
     # (the next plan's release_owner clears it).
     try:
-        table.reserve_path(owner, [s.node for s in leg1], leg1[0].t)
+        _reserve_leg(owner, leg1, table, geometry)
         table.reserve_hold(owner, depot, t_pick, t_pick)
-        table.reserve_path(owner, [s.node for s in leg2], leg2[0].t)
+        _reserve_leg(owner, leg2, table, geometry)
         table.reserve_hold(owner, approach, t_place, t_end + 1)  # + handoff
         table.reserve_deed(owner, target, t_place)
     except ReservationConflict:
@@ -336,7 +352,7 @@ def plan_walk(
         return None
     t_arrive = leg[-1].t
     try:
-        table.reserve_path(owner, [s.node for s in leg], leg[0].t)
+        _reserve_leg(owner, leg, table, geometry)
         table.reserve_hold(owner, goal, t_arrive + 1, t_arrive + 1)
     except ReservationConflict:
         table.release_owner(owner, t_now + 1)

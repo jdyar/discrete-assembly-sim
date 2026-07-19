@@ -80,11 +80,20 @@ class TimeExpandedGraph:
         ):
             yield TENode(n, nxt_t)
         # Move: one geometry step; destination free now and forever-free
-        # of parked robots; edge free (no head-on swap).
+        # of parked robots; edge free (no head-on swap); every swept
+        # intermediate cell (multi-cell strides) free across the
+        # transition window (both ticks — conservative, so a robot
+        # departing a swept cell in the same step still conflicts).
         for nbr in self.geometry.neighbors(n):
             if (
                 nbr not in self.static_obstacles
                 and self.reservations.is_free(nbr, nxt_t, self.owner)
                 and self.reservations.edge_free(n, nbr, t, self.owner)
+                and all(
+                    c not in self.static_obstacles
+                    and self.reservations.is_free(c, t, self.owner)
+                    and self.reservations.is_free(c, nxt_t, self.owner)
+                    for c in self.geometry.move_footprint(n, nbr)
+                )
             ):
                 yield TENode(nbr, nxt_t)

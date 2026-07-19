@@ -305,6 +305,93 @@ def speedup_vs_n_chart(ticks: dict[int, int], path: str | Path) -> Path:
     return path
 
 
+def yield3d_chart(
+    ps: list[float],
+    corrected: dict[int, dict[float, list[float]]],
+    baseline: dict[float, list[float]],
+    path: str | Path,
+) -> Path:
+    """4b chart: yield vs defect rate per robot count, against the
+    analytic no-correction bound (1-p) and a measured baseline. The
+    claim: correction holds ~100% at every N — repair works at swarm
+    scale, threaded through live reservations."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.5))
+    blues = {1: "#93c5fd", 2: "#3b82f6", 3: "#1d4ed8"}
+    for n, series in sorted(corrected.items()):
+        means = [sum(series[p]) / len(series[p]) for p in ps]
+        ax.plot(ps, means, color=blues.get(n, "#2563eb"), linewidth=2,
+                marker="o", markersize=4, zorder=4, label=f"corrected, N={n}")
+    b_means = [sum(baseline[p]) / len(baseline[p]) for p in ps]
+    ax.plot(ps, b_means, color="#6b7280", linewidth=2, marker="o",
+            markersize=4, zorder=3, label="no correction, N=2 (measured)")
+    bound = [1 - p for p in ps]
+    ax.plot(ps, bound, color="#9ca3af", linewidth=1.2, linestyle="--",
+            zorder=2, label="(1 − p) per-placement bound")
+
+    ax.set_title("Yield vs defect rate at swarm scale — 3D box, repair "
+                 "through live reservations", loc="left", fontsize=11)
+    ax.set_xlabel("defect probability p per placement")
+    ax.set_ylabel("yield (good voxels / blueprint)")
+    ax.set_ylim(min(min(b_means), min(bound)) - 0.02, 1.008)
+    ax.yaxis.set_major_formatter(lambda v, _: f"{v:.0%}")
+    ax.grid(axis="y", color="#e5e7eb", linewidth=0.8, zorder=0)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(loc="lower left", frameon=False, fontsize=9)
+    fig.tight_layout()
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def knee_vs_size_chart(
+    results: dict[str, dict[int, int]], path: str | Path
+) -> Path:
+    """Speedup vs robot count for multiple structure sizes: the
+    congestion knee moves right as the buildable surface grows."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6.8, 4.4))
+    colors = ["#93c5fd", "#1d4ed8"]
+    for (label, ticks), color in zip(results.items(), colors):
+        ns = sorted(ticks)
+        base = ticks[ns[0]]
+        speedups = [base / ticks[n] for n in ns]
+        ax.plot(ns, speedups, color=color, linewidth=2, marker="o",
+                markersize=5, zorder=3, label=label)
+        ax.annotate(f"x{speedups[-1]:.2f}", xy=(ns[-1], speedups[-1]),
+                    xytext=(6, 0), textcoords="offset points",
+                    va="center", fontsize=9, color=color)
+    ns_all = sorted(next(iter(results.values())))
+    ax.plot(ns_all, ns_all, color="#d1d5db", linewidth=1, linestyle="--",
+            zorder=1, label="ideal (linear)")
+    ax.set_title("Speedup vs robot count by structure size — the "
+                 "congestion knee scales", loc="left", fontsize=11)
+    ax.set_xlabel("robots")
+    ax.set_ylabel("speedup over 1 robot")
+    ax.set_xticks(ns_all)
+    ax.grid(axis="y", color="#e5e7eb", linewidth=0.8, zorder=0)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(loc="upper left", frameon=False, fontsize=9)
+    fig.tight_layout()
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
 def ticks_vs_reach_chart(ticks: dict[int, int], path: str | Path) -> Path:
     """Slice 4c chart: build ticks vs reach radius, same blueprint, same
     coordination code — the motion-model-as-config claim in one figure."""

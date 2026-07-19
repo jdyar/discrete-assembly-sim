@@ -84,6 +84,70 @@ class TestRepairInACrowd3D(unittest.TestCase):
         )
 
 
+class TestConcurrentDefectResequence(unittest.TestCase):
+    """Regression: robot A's repair-resequence while robot B's defect is
+    still standing must DEFER, not crash (found by the 3D yield
+    experiment at N=2, p=0.08 — plan_build_order refuses dirty worlds,
+    and the single-robot 'remove before replanning' contract doesn't
+    survive concurrency)."""
+
+    def test_repair_defers_while_another_defect_stands(self):
+        world = World3D(5, 8, 10)
+        world.set_box_blueprint(width=3, depth=3, height=2, left=4, front=3)
+        depot = (1, 4, 1)
+        swarm = Swarm(
+            world, depot, starts=[(1, 2, 1), (1, 6, 1)],
+            geometry_factory=CubicLattice3D,
+        )
+        # Robot B's defective voxel is standing (inspect pending)...
+        standing = (1, 3, 4)
+        world.place_voxel(standing, defective=True)
+        # ...when robot A's repair triggers a resequence. Must not raise.
+        swarm.sequencer.repair((1, 3, 6))
+        self.assertTrue(swarm.sequencer.needs_resequence)
+        # B's pipeline removes its defect; the next tick consumes the flag.
+        world.remove_voxel(standing)
+        swarm.tick()
+        self.assertFalse(swarm.sequencer.needs_resequence)
+        self.assertIn((1, 3, 6), swarm.sequencer.queue)
+
+
+class TestStrideSwarm3D(unittest.TestCase):
+    """Two stride-2 robots share the stage: multi-cell moves thread the
+    live reservation table without collisions or entrapment (the
+    footprint machinery under real coupled-loop traffic)."""
+
+    def test_two_stride2_robots_build_the_box(self):
+        world = World3D(5, 8, 10)
+        world.set_box_blueprint(width=3, depth=3, height=2, left=4, front=3)
+        depot = (1, 4, 1)
+        factory = lambda w: CubicLattice3D(w, MotionModel(stride=2))
+        swarm = Swarm(
+            world, depot,
+            starts=[(1, 2, 1), (1, 6, 1)],
+            geometry_factory=factory,
+        )
+        drive(self, swarm, world, depot, label="stride2-swarm")
+
+
+class TestCoupledPairSwarm3D(unittest.TestCase):
+    """The coupled-robot model at the swarm level: one PAIR (a single
+    logical robot with combined reach 2) builds the box — coupling is a
+    swarm-setup config, zero coordination changes (modeling decision
+    2026-07-19, see sim/geometry3d.py MotionModel docstring)."""
+
+    def test_coupled_pair_builds_the_box(self):
+        world = World3D(5, 8, 10)
+        world.set_box_blueprint(width=3, depth=3, height=2, left=4, front=3)
+        depot = (1, 4, 1)
+        pair = MotionModel(reach_radius=1).coupled(MotionModel(reach_radius=1))
+        factory = lambda w: CubicLattice3D(w, pair)
+        swarm = Swarm(
+            world, depot, starts=[(1, 2, 1)], geometry_factory=factory,
+        )
+        drive(self, swarm, world, depot, label="coupled-pair")
+
+
 class TestFuzzCoupledLoop3D(unittest.TestCase):
     """Randomized scenarios through the full coupled loop.
 
@@ -121,13 +185,15 @@ class TestFuzzCoupledLoop3D(unittest.TestCase):
             starts = rng.sample(ground, n_robots)
             defect_p = rng.choice((0.0, 0.0, 0.1))
             reach = rng.choice((1, 1, 2))
+            stride = rng.choice((1, 1, 2))
             label = (
                 f"case={case} box={width}x{depth}x{height}@({front},{left}) "
                 f"hollow={hollow} world={levels}x{rows}x{cols} depot={depot} "
-                f"starts={starts} p={defect_p} reach={reach}"
+                f"starts={starts} p={defect_p} reach={reach} stride={stride}"
             )
+            motion = MotionModel(reach_radius=reach, stride=stride)
             geometry_factory = (
-                lambda w, _r=reach: CubicLattice3D(w, MotionModel(_r))
+                lambda w, _m=motion: CubicLattice3D(w, _m)
             )
             with self.subTest(label):
                 swarm = Swarm(

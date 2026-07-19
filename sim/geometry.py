@@ -74,6 +74,17 @@ class Geometry:
         """
         return 0
 
+    def move_footprint(self, a: Node, b: Node) -> tuple:
+        """Cells SWEPT by the move a -> b, excluding the endpoints.
+
+        One-cell steps sweep nothing (default). Motion models with
+        multi-cell strides return the intermediate cells so the
+        reservation machinery can protect them for the transition
+        window — the coordination stack stays motion-agnostic; it only
+        learns that a move may occupy more than its endpoints.
+        """
+        return ()
+
     def bound_factory(self):
         """A ``world -> Geometry`` factory reproducing THIS geometry's
         configuration (motion model, etc.) on another world. Callers that

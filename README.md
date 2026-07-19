@@ -16,6 +16,10 @@ The same coordination code that manages **zero speedup in 2D** (a wall build is 
 
 Zero collisions, zero deadlocks, roof placed last so nobody gets sealed inside — and the chart shows the honest part too: the **congestion knee**. On this 40-voxel box the fifth robot buys only ×1.05 marginal speedup; contention for stances and the depot becomes the binding constraint. Reproduce with `python main.py speedup3d`.
 
+The knee is a property of the *structure*, not the stack: give the same swarm a 96-voxel box and five robots reach **×4.07** with no knee in sight (`python main.py knee3d`):
+
+![Speedup vs robot count for two structure sizes against the ideal line — the knee moves right as the structure grows](docs/knee_vs_size.png)
+
 ## Error correction makes yield digital
 
 Discrete ("digital") materials promise what error correction gave to data: **reliable wholes from unreliable steps**. Each placement fails with probability *p* (a bad bond). A blind builder's yield decays like (1−p)ⁿ; a builder that inspects, removes, and replans holds ~100% yield and pays time instead:
@@ -23,6 +27,12 @@ Discrete ("digital") materials promise what error correction gave to data: **rel
 ![Yield vs defect rate, with and without error correction](docs/yield_vs_p.png)
 
 At p = 0.08 (10 seeds): **corrected yield 100%**; the baseline decays to ~83% at p = 0.15. Reproduce with `python main.py yield`. In a survey of 42 related research codebases, a working inspect-remove-replan loop appeared in none of them.
+
+At **swarm scale** the stakes turn out to be higher than the single-robot chart suggests. With multiple robots and safety gates, an uncorrected defect doesn't just subtract from yield — it **poisons the buildability proofs and jams the coordinated build** near the defect. Corrected swarms hold 100% at every robot count; uncorrected ones stall far below the (1−p) decay line:
+
+![Yield vs defect rate at swarm scale: corrected 100% at N=1..3; uncorrected collapses to ~15% at p=0.08](docs/yield3d.png)
+
+Reproduce with `python main.py yield3d`. The repair experiment also caught a genuine concurrency bug — a repair replan racing another robot's still-standing defect — now fixed with a regression test pinning the exact interleaving (`tests/test_swarm3d.py`).
 
 ## Quickstart
 
@@ -37,11 +47,13 @@ pip install -r requirements.txt
 python main.py swarm3d 2      # 2 robots build a 3D hollow box -> runs/latest.json
 python main.py speedup3d      # speedup-vs-N (1..5) experiment -> runs/speedup_3d.png
 python main.py reach3d        # build ticks vs reach radius -> runs/ticks_vs_reach.png
+python main.py yield3d        # swarm-scale yield vs p vs N -> runs/yield3d.png
+python main.py knee3d         # congestion knee vs structure size -> runs/knee_vs_size.png
 python main.py swarm 2        # 2 robots, 2D wall (the degenerate case, kept honest)
 python main.py                # single robot, defects + repair (the yield demo)
 python main.py yield          # the yield-vs-p experiment -> runs/yield_vs_p.png
 
-python -m unittest            # 88 tests: traps, 3D repair, fuzzed coupled loop
+python -m unittest            # 98 tests: traps, 3D repair, fuzzed coupled loop
 ```
 
 **Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run.
@@ -51,7 +63,7 @@ python -m unittest            # 88 tests: traps, 3D repair, fuzzed coupled loop
 The design bet of this repo: **coordination logic is invariant to robot hardware.** Everything your robot *is* lives behind two small seams, and the choreographer never looks past them:
 
 - **`Geometry`** (`sim/geometry.py`) — what a lattice is: `neighbors(node)`, `is_footing(node)`, `reach_cells(node)`. Nodes are opaque values; the 2D square lattice and the 3D cubic lattice are both ~150-line implementations, and the test suite includes a string-node triangle-lattice fake to prove nothing upstream assumes coordinates.
-- **`MotionModel`** (`sim/geometry3d.py`) — what your robot can do: today `reach_radius` with **snake-arm articulation** — a target is reachable iff an empty-cell path of length ≤ radius runs from stance to target, so the arm bends around corners and over ledges but never through solid volume (matching real lattice-robot arms). Next on the roadmap: climb limit, multi-cell inchworm steps, and two robots coupling into a longer arm (BILL-E cooperative manipulation lineage).
+- **`MotionModel`** (`sim/geometry3d.py`) — what your robot can do, all config: **`reach_radius`** with snake-arm articulation (a target is reachable iff an empty-cell path of length ≤ radius runs from stance to target — bends around corners, never through walls); **`stride`** (multi-cell inchworm tick-moves, with swept cells protected by the reservation machinery via `move_footprint`); **`climb`** (0 = a ground-bound gantry robot, 1 = a TERMES-class climber); and **coupled pairs** (`MotionModel.coupled` — two attached robots as one logical robot with a combined arm chain, the BILL-E cooperative-manipulation lineage; dynamic mid-run attach/detach is future work).
 
 If your lab's robot climbs exactly one block (TERMES-style), that's config. If it places four cells away around a corner, that's config — and here's what turning that one knob does, with zero coordination changes:
 
@@ -105,9 +117,11 @@ Built in vertical slices — every milestone is a running end-to-end program wit
 - ✅ 3D: cubic lattice behind the same interface, first real speedup
 - ✅ 3D at scale: fuzzed coupled loop (40-case campaign clean), mid-swarm repair in 3D, speedup-vs-N to 5 with the congestion knee identified (N≈4 on the 40-voxel box)
 - ✅ Snake-arm reach as config (radii 1–4 through the unchanged planner; ×1.75 at reach 4)
-- ⏳ Motion-model remainder: multi-cell stride, climb limit, coupled-robot extended reach
-- ⏳ Yield-vs-p at N in 3D; congestion knee vs structure size
+- ✅ Motion-model remainder: multi-cell stride (reservation-sound swept cells), climb limit, coupled-robot pairs
+- ✅ Yield-vs-p at N in 3D (corrected 100% everywhere; uncorrected swarms jam, not decay); congestion knee vs structure size (×4.07 at N=5 on 96 voxels)
+- ⏳ Dynamic robot coupling (mid-run rendezvous/attach/detach)
 - ⏳ Typed part families; gravity + structural checks on partial builds
+- ⏳ Hierarchical sequencing for 10³+-voxel blueprints
 
 ## Contributing & feedback
 

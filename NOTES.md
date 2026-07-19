@@ -83,6 +83,24 @@ the cubic voxel grid is confirmed over strut-level cuboct geometry.
 
 ## Session log
 
+### 2026-07-19 (later) — motion config complete + ship experiments
+(1) MotionModel gains stride and climb; stride is reservation-sound:
+Geometry.move_footprint exposes a multi-cell move's swept intermediates,
+the time-expanded graph refuses moves whose footprint isn't free across
+the transition window, and the choreographer leases footprints with
+each leg. Coupled robots modeled as one logical robot with a combined
+arm chain (MotionModel.coupled) — coupling is swarm-setup config;
+dynamic rendezvous is future work. (2) The swarm-scale yield experiment
+found a real repair race: one robot's post-repair resequence hit the
+planner's dirty-world refusal while another robot's defect was still
+standing. Fixed with a deferred resequence (bounded window — every
+standing defect's detector already holds its REMOVE step); regression
+test pins the interleaving. (3) Results: corrected yield 100% at every
+p x N; uncorrected swarms JAM (standing defects poison buildability
+proofs) far below the (1-p) line. Knee-vs-size: x4.07 at N=5 on a
+96-voxel box vs the N~4 knee on 40 voxels — the knee is a property of
+the structure, not the stack. 98 tests green.
+
 ### 2026-07-19 — 3D at scale: perf 28x, fuzz, repair, snake-arm reach
 (1) Profiled the 2-robot 3D build at 512s wall — 94% in the
 buildability gate re-running the build-order search per placement.

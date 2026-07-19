@@ -257,6 +257,8 @@ def run_swarm3d_build(
     max_ticks: int = 20_000,
     verbose: bool = True,
     geometry_factory=None,
+    depot=None,
+    starts=None,
 ):
     """Slice 4a/4b: N robots, 3D structure, same choreographer."""
     from sim.geometry3d import CubicLattice3D
@@ -265,8 +267,8 @@ def run_swarm3d_build(
 
     swarm = Swarm(
         world,
-        DEPOT3D,
-        starts=SWARM3D_STARTS[:n_robots],
+        depot or DEPOT3D,
+        starts=(starts or SWARM3D_STARTS)[:n_robots],
         defect_p=defect_p,
         rng=random.Random(seed),
         inspect_enabled=correction,
@@ -274,7 +276,7 @@ def run_swarm3d_build(
     )
     log = RunLog()
     log.meta.update(
-        depot=list(DEPOT3D), n_robots=n_robots, defect_p=defect_p,
+        depot=list(depot or DEPOT3D), n_robots=n_robots, defect_p=defect_p,
         seed=seed, correction=correction,
     )
     log.log_tick(0, world, robots=swarm.robots)
@@ -348,6 +350,87 @@ def reach3d_experiment(
     return ticks
 
 
+def yield3d_experiment(
+    ps: tuple = (0.0, 0.04, 0.08, 0.12),
+    ns: tuple = (1, 2, 3),
+    seeds: tuple = (1, 2, 3),
+    out: str = "runs/yield3d.png",
+):
+    """4b done-criterion: yield vs defect rate at swarm scale, against
+    the analytic no-correction bound. Correction must hold ~100% at
+    every N — repair-through-live-reservations at swarm scale."""
+    from sim.metrics import yield3d_chart
+
+    corrected: dict[int, dict[float, list[float]]] = {n: {} for n in ns}
+    for n in ns:
+        for p in ps:
+            vals = []
+            for seed in seeds:
+                world = build_world3d()
+                _log, swarm = run_swarm3d_build(
+                    world, n_robots=n, defect_p=p, seed=seed, verbose=False
+                )
+                vals.append(world.built_count / world.blueprint_count)
+            corrected[n][p] = vals
+            print(f"N={n} p={p}: yield={sum(vals)/len(vals):.3f}")
+    # Measured baseline (no correction), N=2: defects stand where they fall.
+    baseline: dict[float, list[float]] = {}
+    for p in ps:
+        vals = []
+        for seed in seeds:
+            world = build_world3d()
+            _log, _swarm = run_swarm3d_build(
+                world, n_robots=2, defect_p=p, seed=seed,
+                correction=False, verbose=False,
+            )
+            vals.append(world.built_count / world.blueprint_count)
+        baseline[p] = vals
+        print(f"baseline p={p}: yield={sum(vals)/len(vals):.3f}")
+    chart = yield3d_chart(list(ps), corrected, baseline, out)
+    print(f"chart: {chart}")
+
+
+def knee_vs_size_experiment(
+    ns: tuple = (1, 2, 3, 4, 5), out: str = "runs/knee_vs_size.png"
+):
+    """Congestion-knee scaling: speedup-vs-N for two structure sizes.
+    The knee should move right as the structure (and its surface) grows."""
+    from sim.metrics import knee_vs_size_chart
+    from sim.world3d import World3D
+
+    def small_world():
+        return build_world3d()  # hollow 4x4x3 = 40 voxels
+
+    def large_world():
+        world = World3D(6, 12, 14)
+        world.set_box_blueprint(
+            width=6, depth=6, height=4, left=5, front=4, hollow=True
+        )
+        return world
+
+    large_depot = (1, 5, 1)
+    large_starts = [(1, 2, 1), (1, 9, 1), (1, 2, 12), (1, 9, 12), (1, 5, 12)]
+    results: dict[str, dict[int, int]] = {}
+    for label, factory, depot, starts in (
+        ("40 voxels", small_world, None, None),
+        ("96 voxels", large_world, large_depot, large_starts),
+    ):
+        ticks: dict[int, int] = {}
+        for n in ns:
+            world = factory()
+            _log, swarm = run_swarm3d_build(
+                world, n_robots=n, verbose=False, depot=depot, starts=starts
+            )
+            if not world.complete:
+                raise RuntimeError(f"{label} N={n} incomplete")
+            ticks[n] = swarm.tick_count
+            print(f"{label} N={n}: {swarm.tick_count} ticks "
+                  f"(x{ticks[ns[0]] / swarm.tick_count:.2f})")
+        results[label] = ticks
+    chart = knee_vs_size_chart(results, out)
+    print(f"chart: {chart}")
+
+
 def main() -> None:
     import sys
 
@@ -362,6 +445,12 @@ def main() -> None:
         return
     elif mode == "reach3d":
         reach3d_experiment()
+        return
+    elif mode == "yield3d":
+        yield3d_experiment()
+        return
+    elif mode == "knee3d":
+        knee_vs_size_experiment()
         return
     elif mode == "swarm":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 2

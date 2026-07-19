@@ -54,9 +54,44 @@ _AXES = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
 @dataclass(frozen=True)
 class MotionModel:
     """Robot motion capabilities as data. Defaults = the conservative
-    one-cell surface stepper; real systems override (Slice 4c)."""
+    one-cell surface stepper; real systems override (Slice 4c).
+
+    - ``reach_radius``: snake-arm placement reach (see module docstring).
+    - ``stride``: surface cells covered per tick-move — a stride-2 robot
+      chains up to 2 legal surface steps in one tick (SOLL-E-class
+      inchworm gaits cover multiple voxels per gait cycle). Swept
+      intermediate cells are protected by the reservation machinery via
+      :meth:`CubicLattice3D.move_footprint`.
+    - ``climb``: maximum |level change| per tick-move. 1 = the default
+      surface stepper (single steps can only change level by 1 anyway);
+      0 = a ground-bound robot (gantry/rover class); >= 2 matters once
+      stride allows multi-step tick-moves.
+
+    Coupled robots (modeling decision 2026-07-19, delegated authority,
+    flagged for review): two attached robots are modeled as ONE logical
+    robot whose arm chain spans both — :meth:`coupled` returns that
+    combined model (reach = sum of the pair's radii). Coupling is a
+    swarm-setup choice (spawn N pairs instead of 2N solos), which keeps
+    the coordination logic untouched — the BILL-E cooperative-
+    manipulation lineage at the coordination layer. DYNAMIC coupling
+    (mid-run rendezvous, attach, detach) needs a pairing protocol in the
+    task layer and is deliberately post-ship.
+    """
 
     reach_radius: int = 1
+    stride: int = 1
+    climb: int = 1
+
+    def coupled(self, other: "MotionModel") -> "MotionModel":
+        """The motion model of this robot rigidly attached to ``other``:
+        one logical robot, arm chain = both arms end to end. Stride and
+        climb take the pair's minimum (the coupled body is bulkier,
+        never nimbler)."""
+        return MotionModel(
+            reach_radius=self.reach_radius + other.reach_radius,
+            stride=min(self.stride, other.stride),
+            climb=min(self.climb, other.climb),
+        )
 
 
 class CubicLattice3D(Geometry):
@@ -108,15 +143,16 @@ class CubicLattice3D(Geometry):
             for s in (1, -1)
         )
 
-    def neighbors(self, node) -> Iterator[Node]:
+    def _base_moves(self, node) -> Iterator[Node]:
+        """One legal surface step (the machine-verified 2D rules per
+        axis-plane): orthogonal to adjacent footing, or in-plane corner
+        rounding around exactly one solid between-cell."""
         l, r, c = node
         for axis in _AXES:
             for sign in (1, -1):
                 nxt = (l + sign * axis[0], r + sign * axis[1], c + sign * axis[2])
                 if self.is_footing(nxt):
                     yield nxt
-        # In-plane corner rounding: for each pair of axes, pivot around
-        # exactly one solid between-cell (same rule as 2D, per plane).
         for i in range(3):
             for j in range(i + 1, 3):
                 ai, aj = _AXES[i], _AXES[j]
@@ -132,6 +168,56 @@ class CubicLattice3D(Geometry):
                         self._solid(between_i) != self._solid(between_j)
                     ):
                         yield nxt
+
+    def neighbors(self, node) -> Iterator[Node]:
+        """One TICK-MOVE: up to ``stride`` chained surface steps with net
+        |level change| <= ``climb``. Stride 1 (default) is exactly the
+        base step rule. Swept intermediates of longer strides are
+        reported by :meth:`move_footprint` and protected by the
+        reservation machinery."""
+        stride, climb = self.motion.stride, self.motion.climb
+        if stride == 1:
+            for nxt in self._base_moves(node):
+                if abs(nxt[0] - node[0]) <= climb:
+                    yield nxt
+            return
+        seen = {node}
+        frontier = [node]
+        for _depth in range(stride):
+            nxt_frontier = []
+            for cur in frontier:
+                for nxt in self._base_moves(cur):
+                    if nxt in seen:
+                        continue
+                    seen.add(nxt)
+                    nxt_frontier.append(nxt)
+                    if abs(nxt[0] - node[0]) <= climb:
+                        yield nxt
+            frontier = nxt_frontier
+
+    def move_footprint(self, a, b) -> tuple:
+        """Intermediate cells of the shortest base-step path a -> b
+        within ``stride`` steps (deterministic BFS — the same path the
+        stride search found). Empty for adjacent-cell moves."""
+        if self.motion.stride == 1:
+            return ()
+        prev = {a: a}
+        frontier = [a]
+        for _depth in range(self.motion.stride):
+            nxt_frontier = []
+            for cur in frontier:
+                for nxt in self._base_moves(cur):
+                    if nxt in prev:
+                        continue
+                    prev[nxt] = cur
+                    if nxt == b:
+                        path = [b]
+                        while path[-1] != a:
+                            path.append(prev[path[-1]])
+                        return tuple(path[1:-1])  # exclude both endpoints
+                    nxt_frontier.append(nxt)
+            frontier = nxt_frontier
+        return ()
 
     def reach_cells(self, node) -> list[Node]:
         """Snake-arm reach: BFS over Chebyshev steps from ``node``,
@@ -180,9 +266,11 @@ class CubicLattice3D(Geometry):
         return lambda world: CubicLattice3D(world, motion)
 
     def heuristic_distance(self, a, b) -> int:
-        # Chebyshev: every move (orthogonal or in-plane corner diagonal)
-        # changes each coordinate by at most 1 — never overestimates.
-        return max(abs(a[0] - b[0]), abs(a[1] - b[1]), abs(a[2] - b[2]))
+        # Chebyshev over stride: a tick-move changes each coordinate by
+        # at most `stride`, so ceil(chebyshev / stride) never
+        # overestimates tick count.
+        cheb = max(abs(a[0] - b[0]), abs(a[1] - b[1]), abs(a[2] - b[2]))
+        return -(-cheb // self.motion.stride)
 
     def future_view(self, solid_nodes) -> "CubicLattice3D":
         clone = self.world.copy()

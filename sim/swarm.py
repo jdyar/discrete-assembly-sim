@@ -92,6 +92,7 @@ class Sequencer:
         self.geometry_factory = geometry_factory
         self.queue: list[Node] = []
         self.claimed: set[Node] = set()
+        self.needs_resequence = False
         self.resequence()
 
     def resequence(self) -> None:
@@ -129,9 +130,20 @@ class Sequencer:
 
     def repair(self, cell: Node) -> None:
         """A placed cell went bad and was removed: resequence from the
-        world as it stands (the removed cell is EMPTY again and pending)."""
+        world as it stands (the removed cell is EMPTY again and pending).
+
+        At swarm scale ANOTHER robot's defect may still be standing at
+        this moment (its inspect->remove pipeline is a tick behind) and
+        the planner refuses dirty worlds — found by the 3D yield
+        experiment at N=2, p=0.08. The resequence is then DEFERRED: the
+        flag is consumed by Swarm.tick as soon as the world is clean.
+        The window is bounded — every standing defect's detector already
+        holds its REMOVE step."""
         self.claimed.discard(cell)
-        self.resequence()
+        if self.world.defect_count:
+            self.needs_resequence = True
+        else:
+            self.resequence()
 
     @property
     def exhausted(self) -> bool:
@@ -265,6 +277,12 @@ class Swarm:
 
     def tick(self) -> None:
         nxt = self.tick_count + 1
+
+        # Deferred repair-resequence (see Sequencer.repair): run it the
+        # first tick the world is clean again.
+        if self.sequencer.needs_resequence and not self.world.defect_count:
+            self.sequencer.resequence()
+            self.sequencer.needs_resequence = False
 
         # Phase 0: pin every planless robot before anyone plans. A robot
         # whose spot is already leased by someone else (possible after an
