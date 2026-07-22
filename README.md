@@ -8,6 +8,8 @@ Small "relative robots" (MIT BILL-E / NASA ARMADAS lineage) crawl on the voxel s
 
 **30-second version:** the robots for discrete lattice assembly exist (NASA, MIT, Harvard have all flown or published them) — but the *coordination software* is the missing layer. NASA's planner isn't public, the best academic planner is legally unusable (no license), and nobody ships a working mid-swarm repair loop. This repo is that layer, MIT-licensed, built so you can plug in **your** robot's capabilities as config.
 
+**📄 Read the whitepaper: [WHITEPAPER.md](WHITEPAPER.md)** — the full technical account: architecture, the trap-suite benchmark, all five experiments (including the negative results), provenance, and limitations. It's the citable version of this repository.
+
 ## Why 3D is the game
 
 The same coordination code that manages **zero speedup in 2D** (a wall build is a single-file corridor — the second robot starves) gets **real parallelism in 3D**, because the structure's surface gives robots room to route around each other:
