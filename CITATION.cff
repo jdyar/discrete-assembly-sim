@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software or build on its coordination stack, please cite it as below."
+type: software
+title: "discrete-assembly-sim: An Open Coordination Stack for Discrete Lattice Assembly"
+authors:
+  - family-names: "Dyar"
+    given-names: "Joshua"
+version: 0.1.0
+date-released: 2026-07-25
+license: MIT
+repository-code: "https://github.com/jdyar/discrete-assembly-sim"
+abstract: >-
+  A motion-invariant multi-robot coordination stack for discrete lattice
+  assembly: validated build orders, cooperative choreography over a
+  time-expanded graph with lease/deed reservations and placement gates,
+  and in-situ error correction threaded through live reservations.
+  Robot motion capability (reach, stride, climb, coupled pairs) and
+  lattice geometry are injected as configuration. Includes an
+  adversarial trap-fixture benchmark and a replayable run-log format.
+preferred-citation:
+  type: report
+  title: "An Open Coordination Stack for Discrete Lattice Assembly: Motion-Invariant Multi-Robot Choreography with In-Situ Error Correction"
+  authors:
+    - family-names: "Dyar"
+      given-names: "Joshua"
+  year: 2026
+  url: "https://github.com/jdyar/discrete-assembly-sim/blob/main/WHITEPAPER.md"

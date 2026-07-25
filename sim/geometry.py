@@ -17,11 +17,58 @@ cuboctahedral lattice behind this same interface — not a port.
 from __future__ import annotations
 
 from collections import deque
-from typing import Hashable, Iterable, Iterator
+from typing import Hashable, Iterable, Iterator, Protocol, runtime_checkable
 
 from .world import DEFECT, EMPTY, GROUND, VOXEL, World
 
 Node = Hashable
+
+
+@runtime_checkable
+class WorldLike(Protocol):
+    """The world contract the coordination stack duck-types against.
+
+    Implementing a custom lattice means providing TWO things: a
+    :class:`Geometry` (movement/footing/reach rules — below) and a world
+    satisfying this protocol (occupancy + blueprint storage). The stock
+    ``sim.world.World`` (2D) and ``sim.world3d.World3D`` both satisfy it;
+    reuse them whenever your nodes fit a dense array (the hex-lattice
+    example reuses World unchanged). See examples/README.md for the
+    walkthrough.
+
+    Array contract: ``occupancy`` and ``blueprint`` are numpy-style
+    arrays indexable by node (``occupancy[node]``), where ``blueprint``
+    is boolean and ``occupancy`` holds EMPTY/GROUND/VOXEL/DEFECT values.
+    The planner's search additionally WRITES ``occupancy[node] = value``
+    for its own hypotheticals, calls ``blueprint.nonzero()`` to enumerate
+    target nodes, and may replace ``occupancy`` wholesale from a saved
+    ``occupancy.copy()`` snapshot.
+    """
+
+    occupancy: "object"  # numpy-style array, indexable/writable by node
+    blueprint: "object"  # numpy-style bool array, indexable by node
+
+    def is_empty(self, node) -> bool: ...
+
+    def place_voxel(self, node, defective: bool = False) -> None: ...
+
+    def remove_voxel(self, node) -> None: ...
+
+    def is_defective(self, node) -> bool: ...
+
+    def copy(self) -> "WorldLike": ...
+
+    @property
+    def built_count(self) -> int: ...
+
+    @property
+    def defect_count(self) -> int: ...
+
+    @property
+    def blueprint_count(self) -> int: ...
+
+    @property
+    def complete(self) -> bool: ...
 
 
 class Geometry:

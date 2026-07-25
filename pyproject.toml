@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "discrete-assembly-sim"
+version = "0.1.0"
+description = "Open coordination stack for lattice-building robot swarms: validated build orders, multi-robot choreography, and mid-swarm error correction — with robot motion capability as configuration."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Joshua Dyar" }]
+requires-python = ">=3.10"
+dependencies = ["numpy", "matplotlib"]
+keywords = [
+    "robotics",
+    "multi-agent",
+    "swarm",
+    "discrete-assembly",
+    "digital-materials",
+    "path-planning",
+    "MAPF",
+    "simulation",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/jdyar/discrete-assembly-sim"
+Whitepaper = "https://github.com/jdyar/discrete-assembly-sim/blob/main/WHITEPAPER.md"
+Issues = "https://github.com/jdyar/discrete-assembly-sim/issues"
+
+# The import name is `sim`, matching the file references throughout the
+# whitepaper and docs. A rename to a globally unique name is planned if
+# the package is ever published to PyPI; installation is git-based today.
+[tool.setuptools]
+packages = ["sim"]

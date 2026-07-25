@@ -1,5 +1,10 @@
 # discrete-assembly-sim
 
+[![tests](https://github.com/jdyar/discrete-assembly-sim/actions/workflows/tests.yml/badge.svg)](https://github.com/jdyar/discrete-assembly-sim/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+[![cite](https://img.shields.io/badge/cite-CITATION.cff-green)](CITATION.cff)
+
 **An open coordination stack for lattice-building robot swarms: blueprint → validated build order → multi-robot choreography → verification & error correction — with a replayable log of every run.**
 
 Small "relative robots" (MIT BILL-E / NASA ARMADAS lineage) crawl on the voxel structure they are building: they fetch parts from a depot, claim tasks from a solver-validated build order, negotiate space through a shared reservation table, inspect every placement, and remove-and-replace defective parts *while the rest of the swarm keeps working*.
@@ -40,11 +45,23 @@ Reproduce with `python main.py yield3d`. The repair experiment also caught a gen
 
 Requires Python 3.10+. Pure Python + numpy + matplotlib — no game engine, no ROS, no build step.
 
+**Use it as a library in your own project:**
+
+```bash
+pip install git+https://github.com/jdyar/discrete-assembly-sim.git
+python -c "import sim; print(sim.__version__)"   # 0.1.0
+```
+
+**Or clone it to run the demos, experiments, and examples:**
+
 ```bash
 git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-assembly-sim
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+
+python examples/hex_lattice.py   # bring-your-own-LATTICE tutorial (see below)
+python examples/my_robot.py      # bring-your-own-ROBOT tutorial
 
 python main.py swarm3d 2      # 2 robots build a 3D hollow box -> runs/latest.json
 python main.py speedup3d      # speedup-vs-N (1..5) experiment -> runs/speedup_3d.png
@@ -55,14 +72,16 @@ python main.py swarm 2        # 2 robots, 2D wall (the degenerate case, kept hon
 python main.py                # single robot, defects + repair (the yield demo)
 python main.py yield          # the yield-vs-p experiment -> runs/yield_vs_p.png
 
-python -m unittest            # 98 tests: traps, 3D repair, fuzzed coupled loop
+python -m unittest            # 100 tests: traps, 3D repair, fuzz, examples
 ```
 
 **Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run.
 
 ## Plug in your robot
 
-The design bet of this repo: **coordination logic is invariant to robot hardware.** Everything your robot *is* lives behind two small seams, and the choreographer never looks past them:
+The design bet of this repo: **coordination logic is invariant to robot hardware.** Everything your robot *is* lives behind two small seams, and the choreographer never looks past them.
+
+**Don't take the claim on faith — run the tutorials.** [`examples/hex_lattice.py`](examples/hex_lattice.py) implements a hexagonal lattice (which exists *nowhere* in the core library) in ~80 lines and runs the unchanged planner, validator, and two-robot swarm on it. [`examples/my_robot.py`](examples/my_robot.py) builds one blueprint under four different hardware configurations and prints what each buys you. Both are wired into the test suite so they can't rot. The step-by-step walkthrough — including the `WorldLike` protocol your world object must satisfy — is in [`examples/README.md`](examples/README.md).
 
 - **`Geometry`** (`sim/geometry.py`) — what a lattice is: `neighbors(node)`, `is_footing(node)`, `reach_cells(node)`. Nodes are opaque values; the 2D square lattice and the 3D cubic lattice are both ~150-line implementations, and the test suite includes a string-node triangle-lattice fake to prove nothing upstream assumes coordinates.
 - **`MotionModel`** (`sim/geometry3d.py`) — what your robot can do, all config: **`reach_radius`** with snake-arm articulation (a target is reachable iff an empty-cell path of length ≤ radius runs from stance to target — bends around corners, never through walls); **`stride`** (multi-cell inchworm tick-moves, with swept cells protected by the reservation machinery via `move_footprint`); **`climb`** (0 = a ground-bound gantry robot, 1 = a TERMES-class climber); and **coupled pairs** (`MotionModel.coupled` — two attached robots as one logical robot with a combined arm chain, the BILL-E cooperative-manipulation lineage; dynamic mid-run attach/detach is future work).
@@ -133,6 +152,10 @@ Contributions and criticism are both welcome — this is meant to be the referen
 - **Have different hardware?** Implement a `Geometry`/`MotionModel` for your lattice or robot and tell us what the interface couldn't express — interface gaps are the most valuable bug reports this project can get.
 - **Know this literature?** If we've mis-read or missed prior art (especially on reservation schemes or repair-during-construction), open an issue with the citation. Provenance corrections are taken seriously — see the clean-room policy in [docs/DESIGN.md](docs/DESIGN.md).
 - Start with [CONTRIBUTING.md](CONTRIBUTING.md) for setup, test conventions, and the list of good first issues. For questions and design discussion, use [GitHub Discussions](../../discussions); for bugs, [Issues](../../issues).
+
+## Citing
+
+If you use this stack or benchmark against its trap suite, cite via [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this repository" button uses it). The preferred citation is the [whitepaper](WHITEPAPER.md).
 
 ## License
 
