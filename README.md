@@ -15,33 +15,7 @@ Small "relative robots" (MIT BILL-E / NASA ARMADAS lineage) crawl on the voxel s
 
 **📄 Read the whitepaper: [WHITEPAPER.md](WHITEPAPER.md)** — the full technical account: architecture, the trap-suite benchmark, all five experiments (including the negative results), provenance, and limitations. It's the citable version of this repository.
 
-## Why 3D is the game
-
-The same coordination code that manages **zero speedup in 2D** (a wall build is a single-file corridor — the second robot starves) gets **real parallelism in 3D**, because the structure's surface gives robots room to route around each other:
-
-![Build time vs robot count on a 3D hollow box: 472 ticks alone, ×2.81 with five robots, congestion knee at four](docs/speedup_3d.png)
-
-Zero collisions, zero deadlocks, roof placed last so nobody gets sealed inside — and the chart shows the honest part too: the **congestion knee**. On this 40-voxel box the fifth robot buys only ×1.05 marginal speedup; contention for stances and the depot becomes the binding constraint. Reproduce with `python main.py speedup3d`.
-
-The knee is a property of the *structure*, not the stack: give the same swarm a 96-voxel box and five robots reach **×4.07** with no knee in sight (`python main.py knee3d`):
-
-![Speedup vs robot count for two structure sizes against the ideal line — the knee moves right as the structure grows](docs/knee_vs_size.png)
-
-## Error correction makes yield digital
-
-Discrete ("digital") materials promise what error correction gave to data: **reliable wholes from unreliable steps**. Each placement fails with probability *p* (a bad bond). A blind builder's yield decays like (1−p)ⁿ; a builder that inspects, removes, and replans holds ~100% yield and pays time instead:
-
-![Yield vs defect rate, with and without error correction](docs/yield_vs_p.png)
-
-At p = 0.08 (10 seeds): **corrected yield 100%**; the baseline decays to ~83% at p = 0.15. Reproduce with `python main.py yield`. In a survey of 42 related research codebases, a working inspect-remove-replan loop appeared in none of them.
-
-At **swarm scale** the stakes turn out to be higher than the single-robot chart suggests. With multiple robots and safety gates, an uncorrected defect doesn't just subtract from yield — it **poisons the buildability proofs and jams the coordinated build** near the defect. Corrected swarms hold 100% at every robot count; uncorrected ones stall far below the (1−p) decay line:
-
-![Yield vs defect rate at swarm scale: corrected 100% at N=1..3; uncorrected collapses to ~15% at p=0.08](docs/yield3d.png)
-
-Reproduce with `python main.py yield3d`. The repair experiment also caught a genuine concurrency bug — a repair replan racing another robot's still-standing defect — now fixed with a regression test pinning the exact interleaving (`tests/test_swarm3d.py`).
-
-## Quickstart
+## Install & quickstart
 
 Requires Python 3.10+. Pure Python + numpy + matplotlib — no game engine, no ROS, no build step.
 
@@ -76,6 +50,32 @@ python -m unittest            # 100 tests: traps, 3D repair, fuzz, examples
 ```
 
 **Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run.
+
+## Why 3D is the game
+
+The same coordination code that manages **zero speedup in 2D** (a wall build is a single-file corridor — the second robot starves) gets **real parallelism in 3D**, because the structure's surface gives robots room to route around each other:
+
+![Build time vs robot count on a 3D hollow box: 472 ticks alone, ×2.81 with five robots, congestion knee at four](docs/speedup_3d.png)
+
+Zero collisions, zero deadlocks, roof placed last so nobody gets sealed inside — and the chart shows the honest part too: the **congestion knee**. On this 40-voxel box the fifth robot buys only ×1.05 marginal speedup; contention for stances and the depot becomes the binding constraint. Reproduce with `python main.py speedup3d`.
+
+The knee is a property of the *structure*, not the stack: give the same swarm a 96-voxel box and five robots reach **×4.07** with no knee in sight (`python main.py knee3d`):
+
+![Speedup vs robot count for two structure sizes against the ideal line — the knee moves right as the structure grows](docs/knee_vs_size.png)
+
+## Error correction makes yield digital
+
+Discrete ("digital") materials promise what error correction gave to data: **reliable wholes from unreliable steps**. Each placement fails with probability *p* (a bad bond). A blind builder's yield decays like (1−p)ⁿ; a builder that inspects, removes, and replans holds ~100% yield and pays time instead:
+
+![Yield vs defect rate, with and without error correction](docs/yield_vs_p.png)
+
+At p = 0.08 (10 seeds): **corrected yield 100%**; the baseline decays to ~83% at p = 0.15. Reproduce with `python main.py yield`. In a survey of 42 related research codebases, a working inspect-remove-replan loop appeared in none of them.
+
+At **swarm scale** the stakes turn out to be higher than the single-robot chart suggests. With multiple robots and safety gates, an uncorrected defect doesn't just subtract from yield — it **poisons the buildability proofs and jams the coordinated build** near the defect. Corrected swarms hold 100% at every robot count; uncorrected ones stall far below the (1−p) decay line:
+
+![Yield vs defect rate at swarm scale: corrected 100% at N=1..3; uncorrected collapses to ~15% at p=0.08](docs/yield3d.png)
+
+Reproduce with `python main.py yield3d`. The repair experiment also caught a genuine concurrency bug — a repair replan racing another robot's still-standing defect — now fixed with a regression test pinning the exact interleaving (`tests/test_swarm3d.py`).
 
 ## Plug in your robot
 
