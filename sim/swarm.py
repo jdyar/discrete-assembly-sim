@@ -73,10 +73,13 @@ class Sequencer:
     """Ordered task supply, re-derived from the world on demand.
 
     The order comes from ``plan_build_order`` — the reachability-aware
-    sequencer (connectivity proven at every step of its search). Claiming
-    is nearest-first within a lookahead window of the order (frontier
-    claiming, Slice 3b), which preserves the order's dependency structure
-    approximately; the choreographer's gate + kickback covers the rest.
+    sequencer (connectivity proven at every step of its search). When a
+    structural policy is attached, that search also keeps every prefix
+    stable, and the choreographer's stability gate refuses a claim that
+    skips ahead of it. Claiming is nearest-first within a lookahead
+    window of the order (frontier claiming, Slice 3b), which preserves
+    the order's dependency structure approximately; the choreographer's
+    gate + kickback covers the rest.
     """
 
     def __init__(
@@ -85,11 +88,13 @@ class Sequencer:
         depot: Node,
         claim_ahead: int = 6,
         geometry_factory=SquareLattice2D,
+        stability=None,
     ) -> None:
         self.world = world
         self.depot = depot
         self.claim_ahead = claim_ahead
         self.geometry_factory = geometry_factory
+        self.stability = stability
         self.queue: list[Node] = []
         self.claimed: set[Node] = set()
         self.needs_resequence = False
@@ -97,7 +102,12 @@ class Sequencer:
 
     def resequence(self) -> None:
         """Re-derive the build order for everything not yet built."""
-        tasks = plan_build_order(self.world, self.depot, self.geometry_factory)
+        tasks = plan_build_order(
+            self.world,
+            self.depot,
+            self.geometry_factory,
+            stability=self.stability,
+        )
         if tasks is None:
             raise SwarmStuck("sequencer: no feasible build order exists")
         self.queue = [t.cell for t in tasks if t.cell not in self.claimed]
@@ -186,6 +196,7 @@ class Swarm:
         inspect_enabled: bool = True,
         claim_ahead: int = 6,
         geometry_factory=SquareLattice2D,
+        stability=None,
     ) -> None:
         if len(set(starts)) != len(starts):
             raise ValueError("robot starts must be distinct")
@@ -194,7 +205,10 @@ class Swarm:
         self.geometry: Geometry = geometry_factory(world)
         self.table = ReservationTable()
         self.robots = [SwarmRobot(i, s) for i, s in enumerate(starts)]
-        self.sequencer = Sequencer(world, depot, claim_ahead, geometry_factory)
+        self.stability = stability
+        self.sequencer = Sequencer(
+            world, depot, claim_ahead, geometry_factory, stability=stability
+        )
         self.defect_p = defect_p
         self.defect_cells = set(defect_cells or ())
         self._defects_pending = set(self.defect_cells)  # first attempt only
@@ -371,6 +385,7 @@ class Swarm:
             self.inspect_enabled,
             static_obstacles=self._obstacles_for(r),
             remaining_cells=frozenset(self.sequencer.queue),
+            stability=self.stability,
         )
         if plan is None:
             self._try_hold(r)

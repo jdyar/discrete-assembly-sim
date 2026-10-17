@@ -151,6 +151,22 @@ class Geometry:
         """
         raise NotImplementedError
 
+    def stability_policy(self, max_cantilever: int | None = 0):
+        """Frame for :mod:`sim.stability`: which axis is up, and where the
+        base plane is.
+
+        The planner and the choreographer never call this. A caller who
+        opts into the structural gate asks the lattice, so gravity axes
+        stay behind the geometry seam. Lattices whose nodes are not
+        integer coordinates (the string-node test fake) have no frame
+        and raise. ``max_cantilever`` is the span limit forwarded onto
+        the policy; it is not a property of the lattice.
+        """
+        raise NotImplementedError(
+            "this lattice has no structural frame; pass an explicit "
+            "StabilityPolicy if its nodes are coordinates"
+        )
+
 
 def bfs_path(
     geometry: Geometry, start: Node, goals: Iterable[Node]
@@ -287,3 +303,15 @@ class SquareLattice2D(Geometry):
             if clone.occupancy[r, c] == EMPTY:
                 clone.occupancy[r, c] = VOXEL
         return SquareLattice2D(clone)
+
+    def stability_policy(self, max_cantilever: int | None = 0):
+        # Row 0 is the top of the array; the ground row is the bottom.
+        # Up is decreasing row. The whole ground row is the base plate.
+        from .stability import StabilityPolicy
+
+        return StabilityPolicy(
+            up_axis=0,
+            up_sign=-1,
+            ground_plane=self.world.rows - 1,
+            max_cantilever=max_cantilever,
+        )

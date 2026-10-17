@@ -278,3 +278,15 @@ class CubicLattice3D(Geometry):
             if clone.occupancy[node] == EMPTY:
                 clone.occupancy[node] = VOXEL
         return CubicLattice3D(clone, self.motion)
+
+    def stability_policy(self, max_cantilever: int | None = 0):
+        # Level 0 is the solid ground plane; levels increase upward.
+        # The whole plane is the base plate.
+        from .stability import StabilityPolicy
+
+        return StabilityPolicy(
+            up_axis=0,
+            up_sign=1,
+            ground_plane=0,
+            max_cantilever=max_cantilever,
+        )
