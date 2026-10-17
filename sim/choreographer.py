@@ -14,6 +14,13 @@ robot's anchor position from the depot. A refused placement is kicked
 back to the sequencer (receding-horizon coupling, docs/DESIGN.md
 Architecture Requirements) rather than failing the run.
 
+An optional third gate, :func:`stability_gate`, applies when the caller
+passes a :class:`~sim.stability.StabilityPolicy`. It is off by default.
+It asks whether the partial structure (voxels already placed, plus this
+proposal) still passes :func:`~sim.stability.is_stable`. A deed is not
+material — gravity does not honor a reservation — so unplaced deeds are
+not supports. A refusal is the same kickback as the other two gates.
+
 Policy (decided 2026-07-14, options presented): **per-task receding
 horizon** — a robot plans ONE task when it becomes free (current pos ->
 depot, PICK, depot -> approach stance, PLACE, INSPECT), reserving only
@@ -35,6 +42,7 @@ from typing import Hashable, Iterable, NamedTuple
 from .geometry import Geometry, bfs_path
 from .planner import SearchBudgetExceeded, plan_build_order
 from .reservations import OwnerId, ReservationConflict, ReservationTable
+from .stability import StabilityPolicy, is_stable, occupied_voxels
 from .texgraph import TENode, TimeExpandedGraph
 
 Node = Hashable
@@ -218,6 +226,28 @@ def buildability_gate(
     return verdict
 
 
+def stability_gate(
+    geometry: Geometry,
+    proposed_target: Node,
+    policy: StabilityPolicy,
+) -> bool:
+    """May ``proposed_target`` be placed without an unstable partial build?
+
+    The structure that has to stand is the voxels already in the world
+    plus this cell. Other robots' unplaced deeds are ignored: a deed is
+    a promise to place, and the block is not there yet. (The connectivity
+    gate counts those deeds, because a cell that *will* be solid can
+    trap a robot. Load and entrapment are different questions.)
+
+    The frame — which axis is up, where the base is, how far a span may
+    reach — comes entirely from ``policy``. This function does no
+    coordinate arithmetic of its own.
+    """
+    cells = set(occupied_voxels(geometry.world))
+    cells.add(tuple(int(coord) for coord in proposed_target))
+    return is_stable(cells, policy)
+
+
 def _reserve_leg(
     owner: OwnerId,
     leg: list[TENode],
@@ -256,6 +286,7 @@ def plan_task(
     inspect_enabled: bool = True,
     static_obstacles: frozenset | set = frozenset(),
     remaining_cells: Iterable[Node] = (),
+    stability: StabilityPolicy | None = None,
 ) -> TaskPlan | None:
     """Plan and RESERVE one full task: pos -> depot, PICK, -> stance,
     PLACE (deed), INSPECT + spare REMOVE slot.
@@ -264,7 +295,8 @@ def plan_task(
     per leg and rolled back wholesale (release_owner from t_now+1) if any
     reservation unexpectedly conflicts. Returns None — with the table
     unchanged from this attempt — when a leg is unplannable, the stance
-    set is empty, or the connectivity gate refuses the placement.
+    set is empty, or a gate refuses the placement. ``stability``, when
+    given, is the structural gate; leave it ``None`` to skip that gate.
 
     ``anchors`` are the other robots' committed end positions; this
     robot's own escape is checked from the chosen stance.
@@ -294,10 +326,15 @@ def plan_task(
 
     # Gates: the placement must sever no robot's permanent-future escape
     # (including this robot's own from its stance), and must leave the
-    # remaining blueprint completable.
+    # remaining blueprint completable. The structural gate, when on,
+    # runs before the build-order search: a span that will not stand is
+    # refused without paying for that search. A refusal returns None
+    # with nothing reserved, which the swarm kicks back for reordering.
     if not connectivity_gate(
         geometry, table, target, list(anchors) + [approach], depot
     ):
+        return None
+    if stability is not None and not stability_gate(geometry, target, stability):
         return None
     if not buildability_gate(geometry, table, target, remaining_cells, depot):
         return None

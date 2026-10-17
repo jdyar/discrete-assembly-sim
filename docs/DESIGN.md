@@ -54,6 +54,25 @@ Two gates run before any placement is committed:
   projected future world). Catches out-of-order placements that would
   seal a pocket of unbuilt cells.
 
+A third gate, **structural stability**, is off unless the caller passes
+a `StabilityPolicy` (`sim/stability.py`). It refuses a placement whose
+partial build is not face-connected to a column bearing on the base, or
+whose horizontal overhang exceeds `max_cantilever`. A refusal is the
+same kickback. The coordinate arithmetic stays in `sim/stability.py`;
+the planner and the choreographer only see the policy the lattice (or
+the caller) built, which is what keeps the "no lattice assumptions"
+rule intact. The gate counts voxels already in the world plus the
+proposal. It does not count an unplaced deed as a support: a
+reservation does not carry load. Connectivity still counts deeds,
+because a cell that will be solid can trap a robot.
+
+The sag estimate is not a gate. It is a dense `Ku = mg` solve (voxels
+as nodes, face joints as axial and shear springs) that reports the
+worst displacement of a partial build. It is not run inside the search.
+Default-off is load-bearing: `max_cantilever=0` rejects spans, including
+a hollow-box roof, and the published experiments were not run with the
+gate on.
+
 ## Provenance (clean-room rule)
 
 The multi-robot choreography is implemented clean-room from published

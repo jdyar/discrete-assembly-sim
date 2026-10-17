@@ -19,6 +19,10 @@ between placements:
    depot exists; ditto after the final one.
 3. **Never walls off unbuilt cells** — implied by 1: the search only
    accepts states from which every remaining cell is still placeable.
+4. **Structurally stable, if asked** — when ``stability`` is a
+   :class:`~sim.stability.StabilityPolicy`, every prefix must pass
+   :func:`~sim.stability.is_stable`. Off unless the caller opts in, so
+   a search that used to allow a floating placement still does.
 
 ``validate_plan`` independently re-simulates a finished plan against the
 same rules (defense in depth — run it before execution).
@@ -35,6 +39,12 @@ from __future__ import annotations
 from typing import Callable, NamedTuple
 
 from .geometry import Geometry, SquareLattice2D, bfs_path, bfs_reachable
+from .stability import (
+    StabilityPolicy,
+    assess_stability,
+    is_stable,
+    occupied_voxels,
+)
 from .world import EMPTY, VOXEL, World
 
 Cell = tuple[int, int]
@@ -70,6 +80,8 @@ def plan_build_order(
     depot: Cell,
     geometry_factory: GeometryFactory = SquareLattice2D,
     max_nodes: int = 200_000,
+    *,
+    stability: StabilityPolicy | None = None,
 ) -> list[Task] | None:
     """Search for a complete, valid placement order for the blueprint.
 
@@ -85,6 +97,13 @@ def plan_build_order(
     is hit first (feasibility undecided).
 
     The world is restored to its input state before returning.
+
+    ``stability``, when given, rejects any prefix that fails
+    :func:`~sim.stability.is_stable` and the search tries a different
+    cell (the same backtracking it uses for a stranded robot). The
+    check does not depend on which stance places the cell, so a cell
+    that fails it is not retried from another approach in that state.
+    Leave it ``None`` (the default) to keep the no-gravity search.
     """
     if world.defect_count:
         # Contract (Slice 2): the robot removes a defect before requesting a
@@ -128,8 +147,19 @@ def plan_build_order(
                 candidates.append((key, target, approach))
         candidates.sort(key=lambda x: x[0])
 
+        # Stability does not depend on the stance, so one refusal retires
+        # the cell for this world state.
+        rejected_unstable: set[Cell] = set()
         for _key, target, approach in candidates:
+            if target in rejected_unstable:
+                continue
             world.occupancy[target] = VOXEL
+            if stability is not None and not is_stable(
+                occupied_voxels(world), stability
+            ):
+                rejected_unstable.add(target)
+                world.occupancy[target] = EMPTY
+                continue
             # Never strand: the stance must still connect back to the depot.
             if bfs_path(geometry, approach, {depot}) is not None:
                 plan.append(Task(target, approach))
@@ -154,12 +184,16 @@ def validate_plan(
     tasks: list[Task],
     depot: Cell,
     geometry_factory: GeometryFactory = SquareLattice2D,
+    *,
+    stability: StabilityPolicy | None = None,
 ) -> tuple[bool, str]:
     """Re-simulate ``tasks`` against footing/reach/round-trip rules.
 
     Checks every placement in order on a scratch copy of the world:
     depot -> approach path, footing at the approach, target within reach and
-    empty, and approach -> depot path after placing. Returns (ok, reason).
+    empty, and approach -> depot path after placing. When ``stability`` is
+    set, each prefix must also pass :func:`~sim.stability.is_stable`.
+    Returns (ok, reason).
     """
     scratch = world.copy()
     geometry = geometry_factory(scratch)
@@ -177,6 +211,13 @@ def validate_plan(
         if bfs_path(geometry, depot, {approach}) is None:
             return False, f"{label}: no path depot->approach"
         scratch.occupancy[target] = VOXEL
+        if stability is not None:
+            report = assess_stability(occupied_voxels(scratch), stability)
+            if not report.stable:
+                return (
+                    False,
+                    f"{label}: partial structure is not stable ({report.reason})",
+                )
         if bfs_path(geometry, approach, {depot}) is None:
             return False, f"{label}: robot stranded after placement"
     if not scratch.complete:

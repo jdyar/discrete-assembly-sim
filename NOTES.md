@@ -83,6 +83,21 @@ the cubic voxel grid is confirmed over strut-level cuboct geometry.
 
 ## Session log
 
+### 2026-10-17 — v0.2 milestone 1: structural stability gate (off by default)
+
+`sim/stability.py`. `is_stable` requires every voxel to face-connect to
+a column that bears on the base, and limits horizontal face-steps from
+that column (`max_cantilever`). `estimate_sag` is a separate
+small-displacement spring network (voxels = nodes, face joints = axial
+and shear springs, numpy `Ku = f`) and reports worst-case displacement.
+It is not inside the search. The planner, the validator, and the
+choreographer take an optional `StabilityPolicy` and otherwise behave
+exactly as before; a refused step uses the existing kickback path.
+Deeds are not structural supports. The "42 codebases" / "legally
+unusable planner" lines in the README and whitepaper are now flagged as
+author notes: the survey list was never committed. Package version
+stays 0.1.0 because the default build is unchanged. 124 tests.
+
 ### 2026-07-19 (later) — motion config complete + ship experiments
 (1) MotionModel gains stride and climb; stride is reservation-sound:
 Geometry.move_footprint exposes a multi-cell move's swept intermediates,

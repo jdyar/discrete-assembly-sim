@@ -11,7 +11,7 @@ Small "relative robots" (MIT BILL-E / NASA ARMADAS lineage) crawl on the voxel s
 
 ![Two robots assembling a hollow 3D box — ghost cells are unbuilt blueprint](docs/replay3d.png)
 
-**30-second version:** the robots for discrete lattice assembly exist (NASA, MIT, Harvard have all flown or published them) — but the *coordination software* is the missing layer. NASA's planner isn't public, the best academic planner is legally unusable (no license), and nobody ships a working mid-swarm repair loop. This repo is that layer, MIT-licensed, built so you can plug in **your** robot's capabilities as config.
+**30-second version:** the robots for discrete lattice assembly exist (NASA, MIT, Harvard have all flown or published them) — but the *coordination software* is the missing layer. NASA's planner isn't public. While building this, the author looked through related public codebases and did not find a maintained end-to-end stack; that pass is **not** archived here, so the "42 codebases" figure in older notes is an author count, not a survey you can re-run from this repo. The strongest academic planner in that pass (pb-construction) had no license file — an observation about the repo at the time, not a legal opinion. This repo is that layer, MIT-licensed, built so you can plug in **your** robot's capabilities as config.
 
 **📄 Read the whitepaper: [WHITEPAPER.md](WHITEPAPER.md)** — the full technical account: architecture, the trap-suite benchmark, all five experiments (including the negative results), provenance, and limitations. It's the citable version of this repository.
 
@@ -46,7 +46,7 @@ python main.py swarm 2        # 2 robots, 2D wall (the degenerate case, kept hon
 python main.py                # single robot, defects + repair (the yield demo)
 python main.py yield          # the yield-vs-p experiment -> runs/yield_vs_p.png
 
-python -m unittest            # 100 tests: traps, 3D repair, fuzz, examples
+python -m unittest            # 124 tests: traps, 3D repair, fuzz, examples, stability
 ```
 
 **Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run.
@@ -69,7 +69,7 @@ Discrete ("digital") materials promise what error correction gave to data: **rel
 
 ![Yield vs defect rate, with and without error correction](docs/yield_vs_p.png)
 
-At p = 0.08 (10 seeds): **corrected yield 100%**; the baseline decays to ~83% at p = 0.15. Reproduce with `python main.py yield`. In a survey of 42 related research codebases, a working inspect-remove-replan loop appeared in none of them.
+At p = 0.08 (10 seeds): **corrected yield 100%**; the baseline decays to ~83% at p = 0.15. Reproduce with `python main.py yield`. The same unpublished author pass did not find a working inspect-remove-replan loop; that is context, not a counted result.
 
 At **swarm scale** the stakes turn out to be higher than the single-robot chart suggests. With multiple robots and safety gates, an uncorrected defect doesn't just subtract from yield — it **poisons the buildability proofs and jams the coordinated build** near the defect. Corrected swarms hold 100% at every robot count; uncorrected ones stall far below the (1−p) decay line:
 
@@ -103,6 +103,7 @@ sim/
   geometry.py           # THE SEAM: lattice interface + 2D square lattice
   geometry3d.py         # 3D cubic lattice + MotionModel (reach as config)
   planner.py            # build-order solver (proves safety at every step) + validator
+  stability.py          # optional structural screen + linear-elastic sag (off unless asked)
   sequencer + swarm.py  # task claiming, kickback loop, displacement, watchdog
   choreographer.py      # cooperative A* over a time-expanded graph + placement gates
   reservations.py       # the shared table: leases (movement) + deeds (placement)
@@ -110,12 +111,12 @@ sim/
   robot.py              # single-robot state machine (the Slice 1-2 build)
   metrics.py            # replayable JSON run logs (v1/v2/v3) + charts
   render.py             # ASCII + matplotlib animation
-tests/                  # 82 tests incl. spec-first adversarial trap fixtures
+tests/                  # 124 tests incl. spec-first adversarial trap fixtures
 replay_viewer.html      # zero-build Three.js replay viewer (2D + 3D)
 docs/DESIGN.md          # binding architecture rules + provenance per stage
 ```
 
-The multi-robot core, in one paragraph: an idle robot claims the nearest task from the **sequencer**'s validated build order, and the **choreographer** plans its whole task (to depot → pick → to stance → place → inspect) as a shortest path through a **time-expanded graph** — space × time, where waiting is a move — against everyone's existing reservations. Before committing, two gates run: the placement must not disconnect any robot's future from the depot (**connectivity gate**, proven on the world-plus-all-deeds graph), and must leave the rest of the blueprint completable (**buildability gate**). A refusal is a **kickback**: the task returns for reordering and the world moves on — never a deadlock, never a frozen swarm. A defect found at inspect triggers remove + re-sequence *through* live traffic. Full rules and provenance: [docs/DESIGN.md](docs/DESIGN.md).
+The multi-robot core, in one paragraph: an idle robot claims the nearest task from the **sequencer**'s validated build order, and the **choreographer** plans its whole task (to depot → pick → to stance → place → inspect) as a shortest path through a **time-expanded graph** — space × time, where waiting is a move — against everyone's existing reservations. Before committing, two gates run: the placement must not disconnect any robot's future from the depot (**connectivity gate**, proven on the world-plus-all-deeds graph), and must leave the rest of the blueprint completable (**buildability gate**). An optional third gate, **structural stability**, stays off unless you pass a `StabilityPolicy`: every voxel must face-connect to a column on the base, and nothing may stick out past a cantilever limit. A refusal from any gate is a **kickback**: the task returns for reordering and the world moves on — never a deadlock, never a frozen swarm. A defect found at inspect triggers remove + re-sequence *through* live traffic. Full rules and provenance: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Background & references
 
@@ -140,8 +141,9 @@ Built in vertical slices — every milestone is a running end-to-end program wit
 - ✅ Snake-arm reach as config (radii 1–4 through the unchanged planner; ×1.75 at reach 4)
 - ✅ Motion-model remainder: multi-cell stride (reservation-sound swept cells), climb limit, coupled-robot pairs
 - ✅ Yield-vs-p at N in 3D (corrected 100% everywhere; uncorrected swarms jam, not decay); congestion knee vs structure size (×4.07 at N=5 on 96 voxels)
+- ✅ Structural checks, milestone 1 (optional, off by default): grounded connectivity, a cantilever limit, and a linear-elastic sag estimate. Still open: load cases beyond self-weight, a displacement limit inside the gate, cuboct joint mechanics
 - ⏳ Dynamic robot coupling (mid-run rendezvous/attach/detach)
-- ⏳ Typed part families; gravity + structural checks on partial builds
+- ⏳ Typed part families
 - ⏳ Hierarchical sequencing for 10³+-voxel blueprints
 
 ## Contributing & feedback
