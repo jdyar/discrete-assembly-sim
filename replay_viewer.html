@@ -18,6 +18,10 @@
       the file picker). Produce a log with `python main.py` -> runs/latest.json
     - If served over http from the repo root (e.g. `python -m http.server`),
       it auto-loads runs/latest.json.
+      Query: ?log=runs/bridge.json&color=displacement&deform=0.4&frame=0
+    - scripts/render_demo.py drives the page through window.assemblerReplay
+      (setFrame, setColor, setDeform, setOrbit). That object is a capture
+      hook. It does not change playback for a person using the page.
 
   Three.js is loaded from a CDN, so first load needs internet access.
 -->
@@ -689,6 +693,31 @@ fetch(viewParams.get("log") || "runs/latest.json")
   .then(r => (r.ok ? r.json() : Promise.reject()))
   .then(loadRun)
   .catch(() => {});
+
+/* Capture hook for scripts/render_demo.py. A module binding is not
+   visible to Playwright; this is the one object the page exports. */
+window.assemblerReplay = {
+  ready() { return !!run; },
+  nFrames() { return run ? run.ticks.length : 0; },
+  setFrame,
+  setPlaying,
+  setColor(mode) {
+    const sel = $("colorMode");
+    sel.value = mode;
+    sel.dispatchEvent(new Event("change"));
+  },
+  setDeform(scale) {
+    const input = $("deform");
+    input.value = String(scale);
+    input.dispatchEvent(new Event("input"));
+  },
+  setOrbit(theta, phi, radius) {
+    if (theta != null && Number.isFinite(theta)) orbit.theta = theta;
+    if (phi != null && Number.isFinite(phi)) orbit.phi = phi;
+    if (radius != null && Number.isFinite(radius)) orbit.radius = radius;
+    applyCamera();
+  },
+};
 
 /* ---------- loop ---------- */
 let last = performance.now();
