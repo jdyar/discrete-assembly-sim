@@ -168,6 +168,30 @@ does not count another robot's unplaced deed: a reservation is not a
 block, and gravity will not wait for one. Connectivity still counts
 deeds, because a deeded cell *will* be solid and can trap a robot.
 Those are different questions.
+
+Before that search, :func:`necessary_stability_precheck` applies one
+necessary condition to the *finished* set (voxels already down, plus
+every cell the blueprint still has to place). Overhang is monotone:
+deleting cells cannot shorten a face-path to a grounded column, so a
+voxel's overhang in the finished set is a lower bound on its overhang
+in every subset, including the prefix that first places it. A voxel
+that floats there, or that already sits past ``max_cantilever``, makes
+every complete order fail :func:`is_stable`. The planner returns
+infeasible immediately. The check is not a heuristic, and it does not
+reject a blueprint the search could build: a plan the search returns
+has a finished prefix that passed :func:`is_stable`, so the lower bound
+of every voxel in it is inside the limit.
+
+The bound is also the whole stability-ordering question. When the
+finished set passes, a prefix-stable order exists even though a careless
+order can overhang further in the middle (a deck run out from one pier
+before the other pier is up). Every stable subset of a stable set has
+a voxel that can be added: take one of minimum finished overhang that
+is not yet placed; its witness path meets the subset at a cell whose
+finished overhang is already realized inside the subset, or it is the
+next block of a column. Robot reach and the entrapment gates are not
+part of that statement. A blueprint they reject can still pass the
+precheck, and the search is what decides them.
 """
 
 from __future__ import annotations
@@ -341,6 +365,103 @@ def assess_stability(
         overhang=overhang,
         worst_overhang=int(worst),
         max_cantilever=limit,
+    )
+
+
+class StabilityPrecheck(NamedTuple):
+    """Result of :func:`necessary_stability_precheck`.
+
+    ``rejected`` is true only when no order of the cells can keep every
+    prefix inside the policy. ``cell`` is a witness: a floating voxel, or
+    a voxel whose finished overhang is the worst one past the limit.
+    ``lower_bound`` is that finished overhang. It is ``None`` when the
+    witness floats, which is a bound of infinity rather than a span.
+    When the screen passes, ``cell`` / ``lower_bound`` still report the
+    worst finished overhang, so a caller can see how tight the limit is.
+    """
+
+    rejected: bool
+    reason: str
+    cell: Cell | None
+    lower_bound: int | None
+    max_cantilever: int | None
+
+
+def overhang_lower_bounds(
+    occupied_cells: Iterable,
+    policy: StabilityPolicy | None = None,
+    **frame,
+) -> dict[Cell, int | None]:
+    """Least overhang each cell can have in any subset that contains it.
+
+    The value is the overhang in the full set. ``None`` means the cell
+    floats in the full set, so it floats in every subset too. Adding a
+    cell can only add face-paths and grounded columns, and deleting one
+    cannot create either, which is why the full-set overhang is the
+    greatest lower bound.
+    """
+    report = assess_stability(occupied_cells, policy, **frame)
+    bounds: dict[Cell, int | None] = {cell: dist for cell, dist in report.overhang}
+    for cell in report.floating:
+        bounds[cell] = None
+    return bounds
+
+
+def necessary_stability_precheck(
+    occupied_cells: Iterable,
+    policy: StabilityPolicy | None = None,
+    **frame,
+) -> StabilityPrecheck:
+    """Whether these cells can appear together in a prefix-stable order.
+
+    ``occupied_cells`` is the finished set, not one partial build. The
+    rejection reasons are the necessary condition in the module docstring
+    (overhang lower bounds, plus a voxel with no finite bound). A pass
+    means the condition did not fire. It does not by itself mean a robot
+    can assemble the set.
+    """
+    report = assess_stability(occupied_cells, policy, **frame)
+    limit = report.max_cantilever
+    if report.floating:
+        cell = report.floating[0]
+        reason = (
+            f"voxel {cell} has no finite overhang lower bound: it is not "
+            f"face-connected to a grounded column in the finished structure, "
+            f"so every prefix that contains it is unstable"
+        )
+        if len(report.floating) > 1:
+            reason += f" ({len(report.floating)} voxels float)"
+        return StabilityPrecheck(True, reason, cell, None, limit)
+    if not report.stable:
+        worst = report.worst_overhang
+        cell = next(c for c, dist in report.overhang if dist == worst)
+        n_over = sum(1 for _cell, dist in report.overhang if dist > limit)
+        reason = (
+            f"voxel {cell} has overhang lower bound {worst}, which exceeds "
+            f"max_cantilever {limit}; the bound is its overhang in the "
+            f"finished structure, and every prefix that contains it "
+            f"overhangs at least that far"
+        )
+        if n_over > 1:
+            reason += f" ({n_over} voxels exceed the limit)"
+        return StabilityPrecheck(True, reason, cell, int(worst), limit)
+    if not report.overhang:
+        return StabilityPrecheck(
+            False,
+            "finished structure is within the cantilever limit",
+            None,
+            None,
+            limit,
+        )
+    worst = report.worst_overhang
+    cell = next(c for c, dist in report.overhang if dist == worst)
+    return StabilityPrecheck(
+        False,
+        "finished structure is within the cantilever limit; "
+        f"worst overhang lower bound is {worst}",
+        cell,
+        int(worst),
+        limit,
     )
 
 

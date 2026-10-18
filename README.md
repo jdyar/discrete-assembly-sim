@@ -50,7 +50,7 @@ python main.py swarm 2        # 2 robots, 2D wall (the degenerate case, kept hon
 python main.py                # single robot, defects + repair (the yield demo)
 python main.py yield          # the yield-vs-p experiment -> runs/yield_vs_p.png
 
-python -m unittest            # 158 tests: traps, 3D repair, fuzz, examples, stability, strain log, cuboct
+python -m unittest            # 168 tests: traps, 3D repair, fuzz, examples, stability, strain log, cuboct
 ```
 
 **Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run. A log written with strain sampling (`python main.py bridge` → `runs/bridge.json`) adds a color mode for displacement or joint strain, a colorbar, a scale slider, and a marker on the worst-sag voxel. Logs without that data play exactly as before. On a 3D log the voxel menu switches cubic boxes and cuboctahedra. `python main.py cuboct` sets `meta.voxel_shape` so the viewer opens on cuboctahedra; a log that omits the key, including every older log, stays cubic. The menu is a drawing toggle. It does not change the cell graph, and it is not a measurement of ARMADAS hardware.
@@ -136,7 +136,7 @@ sim/
   robot.py              # single-robot state machine (the Slice 1-2 build)
   metrics.py            # replayable JSON run logs (v1/v2/v3) + charts
   render.py             # ASCII + matplotlib animation
-tests/                  # 158 tests incl. spec-first adversarial trap fixtures
+tests/                  # 168 tests incl. spec-first adversarial trap fixtures
 replay_viewer.html      # zero-build Three.js replay viewer (2D + 3D)
 docs/DESIGN.md          # binding architecture rules + provenance per stage
 ```

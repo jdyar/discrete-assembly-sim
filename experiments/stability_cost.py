@@ -18,9 +18,12 @@ in units of ``mass·g/k``. It has not been fit to a printed specimen.
 
 Feasibility is one ``plan_build_order`` search capped at
 :data:`MAX_NODES`. A search that hits the cap is **undecided**, not
-infeasible. Named shapes are small enough that a real rejection finishes
-inside the cap; the 17-voxel hollow box at ``max_cantilever = 0`` does
-not, and the table says so.
+infeasible. With the stability gate on, the planner first applies
+:func:`sim.planner.stability_precheck`: if the finished structure
+itself fails the cantilever screen, the trial is **infeasible** and the
+order search does not run. The hollow 3×3×2 roof is that case at
+``max_cantilever = 0`` (the center cell's overhang lower bound is 1).
+Limits 1 and 2 pass the screen and still go through the search.
 
 Seeds choose robot start cells only (named blueprints are fixed). Fuzz
 seeds choose the blueprint as well. Starts are drawn with
@@ -55,9 +58,10 @@ from sim.swarm import Swarm, SwarmStuck
 from sim.world3d import World3D
 
 # Search budget for the feasibility call. Successful orders on these
-# blueprints return on the first heuristic path (tens of nodes). Proved
-# rejections of the bridges and cantilevers also finish well under this.
-# The hollow box at max_cantilever 0 does not: those rows stay undecided.
+# blueprints return on the first heuristic path (tens of nodes). A
+# finished structure past the cantilever limit never reaches the search:
+# the stability precheck rejects it. The hollow roof at limit 0 is the
+# shape that used to die here as undecided.
 MAX_NODES = 200
 MAX_TICKS = 4_000
 
@@ -130,9 +134,12 @@ def build_wall() -> tuple[World3D, tuple[int, int, int]]:
 def build_hollow_box() -> tuple[World3D, tuple[int, int, int]]:
     """Smallest hollow box the stock helper will cut: 3×3×2, roof on.
 
-    The interior roof cell is one horizontal step from a wall. Limit 0
-    cannot accept the finished roof. The order search does not prove
-    that inside :data:`MAX_NODES`.
+    The interior cell ``(1, 3, 4)`` is missing, so the roof center
+    ``(2, 3, 4)`` has no column under it. In the finished structure its
+    overhang is 1 (one horizontal face-step to a wall). Limit 0 is
+    therefore impossible, and :func:`sim.planner.stability_precheck`
+    rejects it. Limits 1 and 2 allow that lower bound; the finished
+    roof passes, and a prefix-stable order exists.
     """
     world, depot = _depot_and_world(4, 7, 9)
     world.set_box_blueprint(width=3, depth=3, height=2, left=3, front=2, hollow=True)
@@ -173,9 +180,9 @@ def build_fuzz(seed: int) -> tuple[World3D, tuple[int, int, int], str, str]:
 
     The four campaign seeds are one wall, one bridge, one cantilever, and
     one ledge; the seed draws the dimensions. Kinds stay inside the size
-    where a rejection proof fits in :data:`MAX_NODES`. The hollow box is
-    a named shape, not a fuzz draw: its limit-0 search is the slow
-    undecided case, and repeating it here would not add a new fact.
+    where an unscreened rejection proof fits in :data:`MAX_NODES`. The
+    hollow box is a named shape, not a fuzz draw: it is the roof whose
+    limit-0 overhang lower bound the precheck is there to catch.
     """
     rng = random.Random(seed)
     # The published seeds are one of each kind. A seed outside that list

@@ -22,7 +22,12 @@ between placements:
 4. **Structurally stable, if asked** — when ``stability`` is a
    :class:`~sim.stability.StabilityPolicy`, every prefix must pass
    :func:`~sim.stability.is_stable`. Off unless the caller opts in, so
-   a search that used to allow a floating placement still does.
+   a search that used to allow a floating placement still does. Before
+   the search, :func:`stability_precheck` applies
+   :func:`~sim.stability.necessary_stability_precheck` to the finished
+   set. A voxel whose overhang there already exceeds the cantilever
+   limit (or that floats there) is past the limit in every prefix, so
+   the planner returns ``None`` without expanding a node.
 
 ``validate_plan`` independently re-simulates a finished plan against the
 same rules (defense in depth — run it before execution).
@@ -41,8 +46,10 @@ from typing import Callable, NamedTuple
 from .geometry import Geometry, SquareLattice2D, bfs_path, bfs_reachable
 from .stability import (
     StabilityPolicy,
+    StabilityPrecheck,
     assess_stability,
     is_stable,
+    necessary_stability_precheck,
     occupied_voxels,
 )
 from .world import EMPTY, VOXEL, World
@@ -61,6 +68,49 @@ class Task(NamedTuple):
 
 class SearchBudgetExceeded(Exception):
     """Search hit max_nodes: feasibility is UNDECIDED, not disproven."""
+
+
+def _finished_voxels(world: World) -> tuple[Cell, ...]:
+    """Voxels the finished blueprint will hold.
+
+    Cells already placed, plus every blueprint cell that is still empty
+    and will be placed. Ground is not a voxel. A defective block counts:
+    it is still material until something removes it. This is the set
+    :func:`plan_build_order` checks at the end of a complete plan.
+    """
+    cells = set(occupied_voxels(world))
+    for nd in zip(*world.blueprint.nonzero()):
+        cell = tuple(int(x) for x in nd)
+        if world.occupancy[cell] == EMPTY:
+            cells.add(cell)
+    return tuple(cells)
+
+
+def stability_precheck(
+    world: World, stability: StabilityPolicy | None
+) -> StabilityPrecheck:
+    """Necessary condition for a stable order of ``world``'s blueprint.
+
+    ``stability is None`` does not reject: the gate is off, and a
+    floating placement stays legal. Otherwise the finished voxel set is
+    handed to :func:`~sim.stability.necessary_stability_precheck`.
+    Coordinate geometry stays in that module; this function only decides
+    which cells will exist when the blueprint is complete.
+
+    An empty remaining blueprint still has a finished set (whatever is
+    already placed). This function reports that set. :func:`plan_build_order`
+    does not consult it when there is nothing left to place: the replan
+    contract for an empty remainder is an empty plan.
+    """
+    if stability is None:
+        return StabilityPrecheck(
+            rejected=False,
+            reason="stability gate is off",
+            cell=None,
+            lower_bound=None,
+            max_cantilever=None,
+        )
+    return necessary_stability_precheck(_finished_voxels(world), stability)
 
 
 def _approaches_for(target: Cell, geometry: Geometry) -> list[Cell]:
@@ -82,6 +132,7 @@ def plan_build_order(
     max_nodes: int = 200_000,
     *,
     stability: StabilityPolicy | None = None,
+    precheck: bool = True,
 ) -> list[Task] | None:
     """Search for a complete, valid placement order for the blueprint.
 
@@ -92,11 +143,16 @@ def plan_build_order(
     bottom-up, farthest-from-depot first — the order that tends to keep a
     climbable ramp on the depot side.
 
-    Returns None only when the search space was EXHAUSTED — a proof that no
-    valid order exists. Raises :class:`SearchBudgetExceeded` if ``max_nodes``
-    is hit first (feasibility undecided).
+    Returns None only on a proof that no valid order exists: the search
+    space was exhausted, or (when ``stability`` is set and ``precheck``
+    is left on) :func:`stability_precheck` shows the finished structure
+    itself fails the cantilever screen. That second proof does not expand
+    a search node. Raises :class:`SearchBudgetExceeded` if ``max_nodes``
+    is hit first (feasibility undecided). A precheck rejection is not a
+    budget hit.
 
-    The world is restored to its input state before returning.
+    The world is restored to its input state before returning. A rejection
+    from the precheck does not mutate it.
 
     ``stability``, when given, rejects any prefix that fails
     :func:`~sim.stability.is_stable` and the search tries a different
@@ -104,6 +160,13 @@ def plan_build_order(
     check does not depend on which stance places the cell, so a cell
     that fails it is not retried from another approach in that state.
     Leave it ``None`` (the default) to keep the no-gravity search.
+
+    ``precheck=False`` skips only the finished-structure screen. The
+    per-prefix gate inside the search stays. The unscreened search cannot
+    accept a blueprint the screen rejects, because the finished prefix
+    would fail the same gate; turning the screen off only spends the
+    budget. Tests use that to check the screen against an exhaustive
+    search.
     """
     if world.defect_count:
         # Contract (Slice 2): the robot removes a defect before requesting a
@@ -119,6 +182,10 @@ def plan_build_order(
     ]
     if not remaining:
         return []
+    if stability is not None and precheck:
+        screen = stability_precheck(world, stability)
+        if screen.rejected:
+            return None
 
     geometry = geometry_factory(world)
     dead: set[frozenset[Cell]] = set()
