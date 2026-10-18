@@ -2,7 +2,11 @@
 <!--
   Copyright (c) 2026 Joshua Dyar. MIT License (see LICENSE).
 
-  Replay viewer for assembler-sim run logs (contract v1, see sim/metrics.py).
+  Replay viewer for assembler-sim run logs (contract v1/v2/v3, see sim/metrics.py).
+
+  Logs may carry optional per-placement structure samples (displacement and
+  joint strain). Older logs omit that key and still play. The colors are a
+  spring-network estimate; stiffness is not fit to printed specimens.
 
   Usage:
     - Open this file in a browser and drop a run-log JSON onto it (or use
@@ -45,6 +49,25 @@
   .vox  { color: #60a5fa; } .ghost { color: #94a3b8; }
   .bot  { color: #f97316; } .gnd   { color: #6b7280; }
   .bad  { color: #ef4444; }
+  .needs-structure, .is-hidden { display: none !important; }
+  #colorWrap, #deformWrap {
+    display: flex; align-items: center; gap: 6px; color: #94a3b8;
+  }
+  #colorMode { font: inherit; color: #e2e8f0; background: #1e293b;
+    border: 1px solid #334155; border-radius: 6px; padding: 4px 8px; }
+  #deform { width: 200px; accent-color: #a3e635; }
+  #sagReadout { color: #fde68a; min-width: 180px; }
+  #colorbar {
+    position: fixed; left: 14px; bottom: 16px; z-index: 2;
+    display: flex; flex-direction: column; gap: 4px;
+    width: 280px; padding: 8px 10px;
+    background: rgba(11,16,32,.9);
+    border: 1px solid #334155; border-radius: 8px;
+  }
+  #cbarTitle { color: #f8fafc; }
+  #cbar { width: 260px; height: 14px; border-radius: 2px; }
+  #cbarLabels { display: flex; justify-content: space-between; color: #94a3b8; }
+  #cbarNote { color: #64748b; white-space: normal; max-width: 260px; }
   #drop {
     position: fixed; inset: 0; z-index: 3; display: grid; place-items: center;
     background: rgba(11,16,32,.92); text-align: center; padding: 24px;
@@ -72,12 +95,33 @@
     <option value="30">4×</option>
   </select>
   <input id="file" type="file" accept=".json,application/json" />
+  <label id="colorWrap" class="needs-structure">color
+    <select id="colorMode">
+      <option value="material">material</option>
+      <option value="displacement">displacement</option>
+      <option value="axial">axial strain</option>
+      <option value="shear">shear strain</option>
+    </select>
+  </label>
+  <label id="deformWrap" class="needs-structure" title="Multiplies model displacement. 1× draws displacement/pitch in voxel lengths. Above 1× exaggerates. Unfitted k=1 can sag by several voxels, so start below 1.">scale
+    <input id="deform" type="range" min="0" max="2" value="0" step="0.01" />
+    <span id="deformVal">0×</span>
+  </label>
+  <span id="sagReadout" class="needs-structure"></span>
+  <span id="cageKey" class="needs-structure"><b style="color:#fff">□</b> worst sag</span>
   <span id="legend">
     <b class="vox">■</b> voxel&nbsp; <b class="bad">■</b> defect&nbsp;
     <b class="ghost">□</b> blueprint&nbsp;
     <b class="bot">■</b> robot&nbsp; <b class="gnd">■</b> ground&nbsp;
     · space = play/pause, ←/→ = step, drag = orbit, wheel = zoom
   </span>
+</div>
+
+<div id="colorbar" class="needs-structure">
+  <div id="cbarTitle">displacement (mg/k)</div>
+  <canvas id="cbar" width="260" height="14"></canvas>
+  <div id="cbarLabels"><span id="cbarLo">0</span><span id="cbarMid"></span><span id="cbarHi">0</span></div>
+  <div id="cbarNote"></div>
 </div>
 
 <div id="drop">
@@ -167,6 +211,151 @@ let buildGroup = new THREE.Group();
 scene.add(buildGroup);
 
 let frame = 0, playing = false, elapsed = 0;
+let highlight = null;
+let scaleMax = { displacement: 0, axial: 0, shear: 0 };
+const _off = new THREE.Vector3();
+
+/* Viridis-like sequential ramp, and a blue–white–red diverging ramp
+   for signed axial strain (compression on the left). */
+const VIRIDIS = [[68, 1, 84], [59, 82, 139], [33, 144, 141], [93, 201, 98], [253, 231, 37]];
+const DIVERGE = [[37, 99, 235], [191, 219, 254], [248, 250, 252], [254, 202, 202], [220, 38, 38]];
+function ramp(stops, t) {
+  t = Math.min(1, Math.max(0, t));
+  const x = t * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(x));
+  const f = x - i;
+  return stops[i].map((v, k) => Math.round(v + (stops[i + 1][k] - v) * f));
+}
+function fmt(v) {
+  if (!Number.isFinite(v)) return "–";
+  const a = Math.abs(v);
+  if (a !== 0 && (a < 0.01 || a >= 1000)) return v.toExponential(2);
+  return v.toFixed(3);
+}
+function dispOffset(node, u, target) {
+  // Cell-coordinate displacement -> Three.js axes. 3D node is
+  // [level, row, col] drawn as (col, level, row). 2D row grows downward.
+  if (node.length === 3) target.set(u[2] || 0, u[0] || 0, u[1] || 0);
+  else target.set(u[1] || 0, -(u[0] || 0), 0);
+  return target;
+}
+function indexSample(s) {
+  if (!s || s.error) return null;
+  if (s._idx) return s._idx;
+  const disp = new Map();
+  for (const d of s.displacements || []) disp.set(d.cell.join(","), d.u);
+  const axial = new Map();
+  const shear = new Map();
+  for (const j of s.joints || []) {
+    for (const cell of [j.a, j.b]) {
+      const key = cell.join(",");
+      const prevA = axial.get(key);
+      if (prevA === undefined || Math.abs(j.axial) > Math.abs(prevA)) axial.set(key, j.axial);
+      const prevS = shear.get(key);
+      if (prevS === undefined || j.shear > prevS) shear.set(key, j.shear);
+    }
+  }
+  s._idx = { disp, axial, shear };
+  return s._idx;
+}
+function structureAt(frameIndex) {
+  for (let i = frameIndex; i >= 0; i--) {
+    const s = run.ticks[i].structure;
+    if (s) return { sample: s, tick: run.ticks[i].tick };
+  }
+  return null;
+}
+function computeScales(data) {
+  scaleMax = { displacement: 0, axial: 0, shear: 0 };
+  for (const f of data.ticks) {
+    const s = f.structure;
+    if (!s || s.error) continue;
+    for (const d of s.displacements || []) {
+      const n = Math.hypot(...d.u);
+      if (n > scaleMax.displacement) scaleMax.displacement = n;
+    }
+    for (const j of s.joints || []) {
+      scaleMax.axial = Math.max(scaleMax.axial, Math.abs(j.axial));
+      scaleMax.shear = Math.max(scaleMax.shear, j.shear);
+    }
+  }
+}
+function paint(mesh, rgb) {
+  let mat = mesh.userData.paint;
+  if (!mat) {
+    mat = matVoxel.clone();
+    mesh.userData.paint = mat;
+  }
+  mat.color.setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+  mesh.material = mat;
+}
+function colorFor(key, mode, held) {
+  if (!held || held.sample.error || mode === "material") return null;
+  const idx = indexSample(held.sample);
+  if (!idx) return null;
+  if (mode === "displacement") {
+    const u = idx.disp.get(key);
+    if (!u) return null;
+    return ramp(VIRIDIS, Math.hypot(...u) / (scaleMax.displacement || 1));
+  }
+  if (mode === "axial") {
+    if (!idx.axial.has(key)) return null;
+    const t = (idx.axial.get(key) / (scaleMax.axial || 1) + 1) / 2;
+    return ramp(DIVERGE, t);
+  }
+  if (mode === "shear") {
+    if (!idx.shear.has(key)) return null;
+    return ramp(VIRIDIS, idx.shear.get(key) / (scaleMax.shear || 1));
+  }
+  return null;
+}
+function drawColorbar(mode) {
+  const meta = (run.meta && run.meta.structure) || {};
+  if (mode === "material") {
+    $("colorbar").classList.add("is-hidden");
+    return;
+  }
+  $("colorbar").classList.remove("is-hidden");
+  const du = meta.displacement_units || "mg/k";
+  let title, lo, hi, mid, stops;
+  if (mode === "displacement") {
+    title = `displacement (${du})`;
+    lo = "0";
+    hi = fmt(scaleMax.displacement);
+    mid = fmt(scaleMax.displacement / 2);
+    stops = VIRIDIS;
+  } else if (mode === "axial") {
+    title = "axial strain proxy (Δu / pitch)";
+    lo = fmt(-scaleMax.axial);
+    hi = fmt(scaleMax.axial);
+    mid = "0";
+    stops = DIVERGE;
+  } else {
+    title = "shear strain proxy (Δu / pitch)";
+    lo = "0";
+    hi = fmt(scaleMax.shear);
+    mid = fmt(scaleMax.shear / 2);
+    stops = VIRIDIS;
+  }
+  $("cbarTitle").textContent = title;
+  $("cbarLo").textContent = lo;
+  $("cbarMid").textContent = mid;
+  $("cbarHi").textContent = hi;
+  $("cbarNote").textContent = meta.note
+    || "Model estimate. Stiffness has not been fit to printed specimens.";
+  const canvas = $("cbar");
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width, h = canvas.height;
+  const img = ctx.createImageData(w, h);
+  for (let x = 0; x < w; x++) {
+    const [r, g, b] = ramp(stops, x / (w - 1));
+    for (let y = 0; y < h; y++) {
+      const i = (y * w + x) * 4;
+      img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
 
 const $ = id => document.getElementById(id);
 const scrub = $("scrub"), tickLabel = $("tick"), stateLabel = $("state");
@@ -222,6 +411,7 @@ function loadRun(data) {
     } else {
       const m = new THREE.Mesh(unitBox, matVoxel);
       m.position.copy(pos);
+      m.userData.rest = pos.clone();
       m.visible = false;
       buildGroup.add(m);
       cells.set(n.join(","), m);
@@ -240,13 +430,41 @@ function loadRun(data) {
     robotMeshes.push(rm); carryMeshes.push(cm);
   }
 
+  highlight = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(1.12, 1.12, 1.12)),
+    new THREE.LineBasicMaterial({ color: 0xffffff }),
+  );
+  highlight.visible = false;
+  buildGroup.add(highlight);
+
+  const structural = data.ticks.some(t => t.structure);
+  for (const id of ["colorWrap", "deformWrap", "sagReadout", "cageKey", "colorbar"]) {
+    $(id).classList.toggle("needs-structure", !structural);
+  }
+  computeScales(data);
+  const colorNames = new Set([...$("colorMode").options].map(o => o.value));
+  const requestedColor = viewParams.get("color");
+  $("colorMode").value = (requestedColor && colorNames.has(requestedColor))
+    ? requestedColor
+    : (structural ? "displacement" : "material");
+  const requestedScale = viewParams.get("deform");
+  $("deform").value = requestedScale != null && requestedScale !== "" ? requestedScale : "0";
+  $("deformVal").textContent = "0×";
+
   orbit.target = new THREE.Vector3(0, (data.version === 3 ? levels : rows) / 2, 0);
   orbit.radius = Math.max(rows, cols, (levels || 0) * 2) * 1.9;
+  if (viewParams.has("theta")) orbit.theta = Number(viewParams.get("theta"));
+  if (viewParams.has("phi")) orbit.phi = Number(viewParams.get("phi"));
+  if (viewParams.has("radius")) orbit.radius = Number(viewParams.get("radius"));
   applyCamera();
 
   scrub.max = String(data.ticks.length - 1);
-  setFrame(0);
-  setPlaying(true);
+  const requestedFrame = viewParams.get("frame");
+  const initial = requestedFrame === "last"
+    ? data.ticks.length - 1
+    : (requestedFrame != null && requestedFrame !== "" ? Number(requestedFrame) : 0);
+  setFrame(Number.isFinite(initial) ? initial : 0);
+  setPlaying(requestedFrame == null);
   $("drop").classList.add("hidden");
 }
 
@@ -256,19 +474,66 @@ function setFrame(i) {
   const f = run.ticks[frame];
   const occ = f.occupancy;
 
+  const mode = $("colorMode").value;
+  const scale = Number($("deform").value) || 0;
+  const held = structureAt(frame);
+  const meta = (run.meta && run.meta.structure) || {};
+  const pitch = meta.pitch || 1;
+  const idx = held && !held.sample.error ? indexSample(held.sample) : null;
+
   for (const [key, mesh] of cells) {
     const n = key.split(",").map(Number);
     const v = occAt(occ, n);
-    if (v === legend.VOXEL) {
-      mesh.visible = true; mesh.material = matVoxel;
-    } else if (legend.DEFECT !== undefined && v === legend.DEFECT) {
-      mesh.visible = true; mesh.material = matDefect;
+    const solid = v === legend.VOXEL || (legend.DEFECT !== undefined && v === legend.DEFECT);
+    if (solid) {
+      mesh.visible = true;
+      const rgb = colorFor(key, mode, held);
+      if (rgb) paint(mesh, rgb);
+      else mesh.material = (v === legend.DEFECT) ? matDefect : matVoxel;
     } else if (blueprintSet.has(key)) {
       mesh.visible = true; mesh.material = matGhost;
     } else {
       mesh.visible = false;
     }
+    mesh.position.copy(mesh.userData.rest);
+    if (solid && idx && scale !== 0) {
+      const u = idx.disp.get(key);
+      if (u) mesh.position.add(dispOffset(n, u, _off).multiplyScalar(scale / pitch));
+    }
   }
+
+  if (highlight) {
+    const cell = held && !held.sample.error ? held.sample.worst_sag_cell : null;
+    let shown = false;
+    if (cell) {
+      const mesh = cells.get(cell.join(","));
+      const v = occAt(occ, cell);
+      const solid = v === legend.VOXEL || (legend.DEFECT !== undefined && v === legend.DEFECT);
+      if (mesh && solid) {
+        highlight.position.copy(mesh.position);
+        highlight.visible = true;
+        shown = true;
+      }
+    }
+    if (!shown) highlight.visible = false;
+  }
+  if (!run.ticks.some(t => t.structure)) {
+    $("sagReadout").textContent = "";
+  } else if (!held) {
+    $("sagReadout").textContent = "no structural sample yet";
+    $("colorbar").classList.add("is-hidden");
+  } else if (held.sample.error) {
+    $("sagReadout").textContent = "structure undefined";
+    $("colorbar").classList.add("is-hidden");
+  } else {
+    const du = meta.displacement_units || "mg/k";
+    const where = held.sample.worst_sag_cell ? held.sample.worst_sag_cell.join(",") : "–";
+    const from = held.tick === f.tick ? "" : ` · held from tick ${held.tick}`;
+    $("sagReadout").textContent =
+      `worst sag ${fmt(held.sample.worst_sag)} ${du} @ ${where}${from}`;
+    drawColorbar(mode);
+  }
+  $("deformVal").textContent = `${scale}×`;
 
   const crew = f.robots ?? (f.robot ? [f.robot] : []);
   for (let i = 0; i < robotMeshes.length; i++) {
@@ -302,10 +567,14 @@ function setPlaying(on) {
 playBtn.addEventListener("click", () => setPlaying(!playing));
 scrub.addEventListener("input", () => { setPlaying(false); setFrame(Number(scrub.value)); });
 addEventListener("keydown", e => {
+  const tag = e.target && e.target.tagName;
+  if (tag === "INPUT" || tag === "SELECT") return;
   if (e.code === "Space") { e.preventDefault(); setPlaying(!playing); }
   if (e.code === "ArrowRight") { setPlaying(false); setFrame(frame + 1); }
   if (e.code === "ArrowLeft") { setPlaying(false); setFrame(frame - 1); }
 });
+$("colorMode").addEventListener("change", () => setFrame(frame));
+$("deform").addEventListener("input", () => setFrame(frame));
 
 async function loadFile(file) {
   try { loadRun(JSON.parse(await file.text())); }
@@ -318,8 +587,12 @@ addEventListener("drop", e => {
   if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
 });
 
+/* Optional view: ?log=runs/bridge.json&frame=last&color=displacement&deform=0.15
+   1× on the scale slider is the model displacement in voxel lengths. */
+const viewParams = new URLSearchParams(location.search);
+
 /* Auto-load runs/latest.json when served over http (fails silently on file://). */
-fetch("runs/latest.json")
+fetch(viewParams.get("log") || "runs/latest.json")
   .then(r => (r.ok ? r.json() : Promise.reject()))
   .then(loadRun)
   .catch(() => {});

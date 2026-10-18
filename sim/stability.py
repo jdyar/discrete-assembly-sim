@@ -253,6 +253,24 @@ class SagEstimate(NamedTuple):
     n_free: int
 
 
+class JointStrain(NamedTuple):
+    """Strain proxy on one face joint.
+
+    ``axial`` is the relative displacement along the joint, divided by
+    ``pitch``, positive when the joint lengthens (tension). ``shear`` is
+    the magnitude of the relative displacement perpendicular to the
+    joint, divided by ``pitch``. Both are dimensionless. The voxel pitch
+    is the center-to-center distance the caller believes the displacement
+    unit corresponds to; the sag solve itself never uses it.
+    """
+
+    a: Cell
+    b: Cell
+    axis: int
+    axial: float
+    shear: float
+
+
 def occupied_voxels(world) -> tuple[Cell, ...]:
     """Voxels currently in ``world`` (good or defective), as cell tuples.
 
@@ -439,6 +457,55 @@ def estimate_sag(
         n_fixed=n_fixed,
         n_free=n - n_fixed,
     )
+
+
+def joint_strains(
+    estimate: SagEstimate, *, pitch: float = 1.0
+) -> tuple[JointStrain, ...]:
+    """Per-joint strain proxy from an :func:`estimate_sag` result.
+
+    One entry per face-adjacent pair, ``a`` lexicographically before
+    ``b``. ``pitch`` must be in the same length unit as the
+    displacements (meters if the sag inputs were SI; ``1`` in the
+    default model units, where a result of ``mass * g / k`` is treated
+    as one voxel). Positive ``axial`` is extension.
+    """
+    if pitch <= 0:
+        raise ValueError("pitch must be positive")
+    disp = estimate.displacements
+    if not disp:
+        return ()
+    present = set(disp)
+    out: list[JointStrain] = []
+    for a in sorted(present):
+        ua = disp[a]
+        for b in _face_neighbors(a):
+            if b not in present or b < a:
+                continue
+            ub = disp[b]
+            axis = _joint_axis(a, b)
+            # +1 when b sits on the positive side of a along the joint,
+            # so the projection is the change in length, not the raw
+            # coordinate delta (which flips if the neighbor scan hits
+            # the negative side first).
+            direction = 1.0 if b[axis] > a[axis] else -1.0
+            du = [ub[i] - ua[i] for i in range(len(a))]
+            axial = direction * du[axis] / pitch
+            shear_sq = 0.0
+            for i, component in enumerate(du):
+                if i == axis:
+                    continue
+                shear_sq += component * component
+            out.append(
+                JointStrain(
+                    a=a,
+                    b=b,
+                    axis=axis,
+                    axial=float(axial),
+                    shear=float(shear_sq**0.5 / pitch),
+                )
+            )
+    return tuple(out)
 
 
 def path_chain_deflection_at(
