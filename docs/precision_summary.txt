@@ -1,0 +1,54 @@
+Placement error Monte Carlo.
+Distribution: uniform inside ±1.78 cm and ±3.0°. A requirement, not a measured histogram.
+Capture: ski ±1.78 cm in-plane, claw/gripper 1.34 cm out-of-plane.
+Angle gate: the same ±3°. Envelope scale multiplies ski and claw only.
+Snap is an exact elastic average. The printed <0.1 mm bound is not sampled.
+Stiffness is not an input. Sag elsewhere remains the unfitted k = 1.
+Surface fit: line for a chain or a deck, plane for the shelter roof
+(IEEE Aerospace 2024 plate definition, different error source).
+Pitch 0.3048 m = 304.8 mm. N per beam cell is the row count.
+
+cantilever size 3 corrected: n=40 complete 40/40 pooled fail 0.281437 analytic 0.247191 rms median 0 m (0–0) tip median 0 m (0–0) surface median 9.47666e-17 m
+cantilever size 3 uncorrected: n=40 complete 40/40 pooled fail 0.000000 analytic n/a rms median 0.0246546 m (0.0104096–0.0493948) tip median 0.0283784 m (0.00885088–0.0721015) surface median 0.00432991 m
+cantilever size 3 no_snap: n=40 complete 40/40 pooled fail 0.225806 analytic n/a rms median 0.0213178 m (0.0102827–0.0402408) tip median 0.02499 m (0.00879649–0.0530186) surface median 0.00408255 m
+cantilever size 6 corrected: n=40 complete 40/40 pooled fail 0.256966 analytic 0.247191 rms median 9.06493e-17 m (9.06493e-17–9.06493e-17) tip median 2.22045e-16 m (2.22045e-16–2.22045e-16) surface median 2.88444e-16 m
+cantilever size 6 uncorrected: n=40 complete 40/40 pooled fail 0.000000 analytic n/a rms median 0.0378961 m (0.0178445–0.0823002) tip median 0.0563515 m (0.00550427–0.146962) surface median 0.0092679 m
+cantilever size 6 no_snap: n=40 complete 40/40 pooled fail 0.220779 analytic n/a rms median 0.0429424 m (0.0170717–0.0862961) tip median 0.0643081 m (0.0105106–0.134802) surface median 0.00983706 m
+cantilever size 12 corrected: n=40 complete 40/40 pooled fail 0.253499 analytic 0.247191 rms median 2.31111e-16 m (2.31111e-16–2.31111e-16) tip median 4.44089e-16 m (4.44089e-16–4.44089e-16) surface median 0 m
+cantilever size 12 uncorrected: n=40 complete 40/40 pooled fail 0.000000 analytic n/a rms median 0.0790482 m (0.0219288–0.154033) tip median 0.134963 m (0.0230804–0.275039) surface median 0.0174695 m
+cantilever size 12 no_snap: n=40 complete 40/40 pooled fail 0.235669 analytic n/a rms median 0.0763896 m (0.0267526–0.166279) tip median 0.126673 m (0.0342184–0.289057) surface median 0.01709 m
+cantilever size 24 corrected: n=40 complete 40/40 pooled fail 0.261538 analytic 0.247191 rms median 1.00637e-15 m (1.00637e-15–1.00637e-15) tip median 1.77636e-15 m (1.77636e-15–1.77636e-15) surface median 7.86959e-16 m
+cantilever size 24 uncorrected: n=40 complete 40/40 pooled fail 0.000000 analytic n/a rms median 0.237581 m (0.067039–0.605463) tip median 0.404698 m (0.0999236–1.14619) surface median 0.0400529 m
+cantilever size 24 no_snap: n=40 complete 40/40 pooled fail 0.262673 analytic n/a rms median 0.229457 m (0.0688321–0.546571) tip median 0.446006 m (0.119725–1.01846) surface median 0.0444261 m
+bridge size 4 corrected: n=40 complete 40/40 pooled fail 0.270073 analytic 0.284409 rms median 0 m (0–0) tip median 0 m (0–0) surface median 1.64141e-16 m
+bridge size 4 uncorrected: n=40 complete 40/40 pooled fail 0.000000 analytic n/a rms median 0.0346746 m (0.0132737–0.0819323) tip median 0.0423545 m (0.0165563–0.121145) surface median 0.00860494 m
+bridge size 4 no_snap: n=40 complete 11/40 pooled fail 0.884303 analytic n/a rms median 0.0247317 m (0.0118271–0.0603556) tip median 0.0164795 m (0.00827949–0.0220404) surface median 0.00688266 m
+bridge size 6 corrected: n=40 complete 40/40 pooled fail 0.274611 analytic 0.273775 rms median 0 m (0–0) tip median 0 m (0–0) surface median 0 m
+bridge size 6 uncorrected: n=40 complete 40/40 pooled fail 0.000000 analytic n/a rms median 0.0454342 m (0.0237611–0.110246) tip median 0.0682153 m (0.0280428–0.174331) surface median 0.0110207 m
+bridge size 6 no_snap: n=40 complete 3/40 pooled fail 0.866042 analytic n/a rms median 0.0376143 m (0.0208735–0.1077) tip median 0.0113356 m (0.00321056–0.0196004) surface median 0.00936175 m
+bridge size 8 corrected: n=40 complete 40/40 pooled fail 0.278557 analytic 0.267867 rms median 7.40149e-17 m (7.40149e-17–7.40149e-17) tip median 0 m (0–0) surface median 0 m
+bridge size 8 uncorrected: n=40 complete 40/40 pooled fail 0.000000 analytic n/a rms median 0.0648238 m (0.0195068–0.222349) tip median 0.110119 m (0.0161754–0.372614) surface median 0.0134587 m
+bridge size 8 no_snap: n=40 complete 1/40 pooled fail 0.839178 analytic n/a rms median 0.0533341 m (0.0198254–0.121465) tip median 0.0159248 m (0.0159248–0.0159248) surface median 0.0117881 m
+bridge size 12 corrected: n=40 complete 40/40 pooled fail 0.281768 analytic 0.261505 rms median 1.84752e-16 m (1.84752e-16–1.84752e-16) tip median 0 m (0–0) surface median 5.55112e-17 m
+bridge size 12 uncorrected: n=40 complete 40/40 pooled fail 0.000000 analytic n/a rms median 0.102293 m (0.0470025–0.24083) tip median 0.17783 m (0.0860838–0.443734) surface median 0.0175498 m
+bridge size 12 no_snap: n=40 complete 0/40 pooled fail 0.786667 analytic n/a rms median 0.0846567 m (0.0314237–0.197645) tip median nan m (nan–nan) surface median 0.0180914 m
+bridge size 16 corrected: n=40 complete 40/40 pooled fail 0.254386 analytic 0.258137 rms median 4.72565e-16 m (4.72565e-16–4.72565e-16) tip median 8.88178e-16 m (8.88178e-16–8.88178e-16) surface median 5.55112e-17 m
+bridge size 16 uncorrected: n=40 complete 40/40 pooled fail 0.000000 analytic n/a rms median 0.148438 m (0.054825–0.305612) tip median 0.267674 m (0.0463302–0.633644) surface median 0.0261237 m
+bridge size 16 no_snap: n=40 complete 0/40 pooled fail 0.738669 analytic n/a rms median 0.116563 m (0.0450669–0.272711) tip median nan m (nan–nan) surface median 0.0260155 m
+shelter size 256 corrected: n=16 complete 16/16 pooled fail 0.445993 analytic 0.431871 rms median 1.54804e-16 m (1.54804e-16–1.54804e-16) tip median 2.22045e-16 m (2.22045e-16–2.22045e-16) surface median 8.88178e-16 m
+shelter size 256 uncorrected: n=16 complete 16/16 pooled fail 0.000000 analytic n/a rms median 0.116778 m (0.0895975–0.161128) tip median 0.0770202 m (0.043772–0.163596) surface median 0.0474251 m
+shelter size 256 no_snap: n=16 complete 0/16 pooled fail 0.877378 analytic n/a rms median 0.0199097 m (0.0152886–0.0280913) tip median nan m (nan–nan) surface median 0 m
+
+Envelope scale, corrected only (ski and claw × scale).
+  cantilever 12 scale 0.5: n=40 pooled fail 0.905412 analytic 0.905899 rms median 2.31111e-16 m
+  cantilever 12 scale 1.0: n=40 pooled fail 0.253499 analytic 0.247191 rms median 2.31111e-16 m
+  cantilever 12 scale 2.0: n=40 pooled fail 0.000000 analytic 0.000000 rms median 2.31111e-16 m
+  bridge 8 scale 0.5: n=40 pooled fail 0.910537 analytic 0.908483 rms median 7.40149e-17 m
+  bridge 8 scale 1.0: n=40 pooled fail 0.278557 analytic 0.267867 rms median 7.40149e-17 m
+  bridge 8 scale 2.0: n=40 pooled fail 0.000000 analytic 0.000000 rms median 7.40149e-17 m
+  shelter 256 scale 0.5: n=16 pooled fail 0.919228 analytic 0.928984 rms median 9.06493e-17 m
+  shelter 256 scale 1.0: n=16 pooled fail 0.445993 analytic 0.431871 rms median 1.54804e-16 m
+  shelter 256 scale 2.0: n=16 pooled fail 0.000000 analytic 0.000000 rms median 1.54804e-16 m
+
+Reading. With snap on, a seated voxel is back on the ideal center, so RMS does not grow with length. The miss rate is the placement box against the claw, and a second mating axis (the bridge's far cap, the shelter's corners) makes it stricter. Without the check, the ±3° walk moves the tip. Without the snap but with the check, a chain still finishes and a long bridge does not: the far pier is outside the envelope of a deck that has already wandered. k is not used.
+Still: /workspace/docs/precision_cantilever.png seed index 30 axis y factor 1.000 open rms 0.147395 m snap rms 2.31111e-16 m

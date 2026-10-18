@@ -260,6 +260,7 @@ class Swarm:
         scaffold_cells: tuple | set = (),
         sag: SagCap | None = None,
         joints=None,
+        precision=None,
     ) -> None:
         if len(set(starts)) != len(starts):
             raise ValueError("robot starts must be distinct")
@@ -271,6 +272,9 @@ class Swarm:
         self.stability = stability
         self.sag = sag
         self.joints = joints
+        # Opt-in geometric capture. None keeps the Bernoulli defect roll.
+        self.precision = precision
+        self.capture_failures = 0
         self.scaffold_cells = frozenset(scaffold_cells)
         self.sequencer = Sequencer(
             world,
@@ -697,6 +701,8 @@ class Swarm:
                 r.task = None
         elif step.action == REMOVE:
             self.world.remove_voxel(step.target)
+            if self.precision is not None:
+                self.precision.forget(step.target)
             self.table.clear_deed(step.target)
             r.state = "REMOVE"
             if r.task_kind == "remove":
@@ -768,10 +774,29 @@ class Swarm:
     # -- support -------------------------------------------------------------
 
     def _roll_defect(self, cell: Node) -> bool:
+        forced = False
         if cell in self._defects_pending:
             self._defects_pending.discard(cell)
-            return True
-        return self.defect_p > 0 and self.rng.random() < self.defect_p
+            forced = True
+        # A forced cell does not draw. That keeps the Bernoulli stream
+        # identical to the precision-free roll for every existing test.
+        bernoulli = (
+            not forced
+            and self.defect_p > 0
+            and self.rng.random() < self.defect_p
+        )
+        missed = False
+        if self.precision is not None:
+            # Coordinate arithmetic stays in sim.precision. A miss is the
+            # same DEFECT flag the inspect/remove path already repairs.
+            outcome = self.precision.attempt(cell, self.rng)
+            if outcome.captured:
+                self.precision.commit(cell, outcome.pose)
+            else:
+                self.precision.commit(cell, outcome.offered)
+                self.capture_failures += 1
+                missed = True
+        return forced or bernoulli or missed
 
     def _event(self, r: SwarmRobot, kind: str, node: Node) -> None:
         self.events.append((self.tick_count + 1, r.id, kind, node))

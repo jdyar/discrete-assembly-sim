@@ -98,7 +98,7 @@ A tower (`k_axial`) and a bridge (no closed form; `estimate_sag` after both stif
 
 ## What these prints measure, and what they do not
 
-The n = 3 and n = 6 cantilevers, once a round is filled, give `k_shear`. That is a stiffness. It is the number in the table above. It is not a joint strength.
+The n = 3 and n = 6 cantilevers, once a round is filled, give `k_shear`. That is a stiffness. It is the number in the table above. It is not a joint strength. These prints do not measure placement precision. The ±1.78 cm and ±3° box, and the ski and claw envelopes, are the ARMADAS manuscript's requirements (`sim/precision.py`). A tip photo of a PLA cantilever is a stiffness, not a capture rate.
 
 Face strength is a later print: a connector, loaded until the joint breaks, in compression, tension, and shear, with the break load written in the round. Moment, if the fixture can apply one, is the same kind of row. Until that print exists, every strength cell stays `PENDING`. Do not copy a stiffness into a capacity, and do not copy the ARMADAS 3×3×3 derivation (`armadas_face_compression` in `sim/stability.py`) into this table. That derivation is newtons from a published cellular strength. These PLA arms are not that specimen, and a `k = 1` solve is not in newtons.
 

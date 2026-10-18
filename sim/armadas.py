@@ -45,6 +45,8 @@ Confirmed from that manuscript
   caption says the claws enforce <0.2 mm in Y. Both are printed.
   Fastener actuation accommodates up to 0.2 cm in Y. The schedule
   places cells on grid centers. It does not add this error as noise.
+  The placement draw and the ski/claw snap are ``sim.precision``, not
+  this clock.
 
 Not in that manuscript, and labeled as such
 --------------------------------------------
