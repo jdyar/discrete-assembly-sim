@@ -916,7 +916,10 @@ def write_charts(rows: list[dict], out_dir: Path) -> list[Path]:
         _plot_metric(
             rows, out_dir / "stability_planning.png",
             key="plan_s", ylabel="seconds",
-            title=f"Planning wall time — one search, capped at {MAX_NODES} nodes",
+            title=(
+                f"Planning wall time — finished-structure precheck, "
+                f"then a search capped at {MAX_NODES} nodes"
+            ),
             completed_only=False,
         ),
         _plot_feasibility(rows, out_dir / "stability_feasibility.png"),
