@@ -301,8 +301,13 @@ let run = null;           // parsed run-log JSON
 let legend = LEGEND_DEFAULT;
 let cells = new Map();    // "r,c" -> mesh for buildable cells
 let blueprintSet = new Set();
-let robotMeshes = [], carryMeshes = [];
+let robotMeshes = [], carryMeshes = [], robotFeet = [], robotBodies = [];
 let groundAt = new Map(); // "l,r,c" -> ground mesh (rest pose, never deformed)
+// Duplicated from sim/inchworm.py. A foot center this far along the
+// outward normal sits just outside the 0.96 cube (half-extent 0.48).
+const VIEW_FOOT_OUTSET = 0.56;
+const VIEW_BODY_LIFT = 0.20;
+const VIEW_VOXEL_HALF = 0.48;
 let buildGroup = new THREE.Group();
 scene.add(buildGroup);
 
@@ -572,16 +577,25 @@ function loadRun(data) {
 
   const frameCrew = f => f.robots ?? (f.robot ? [f.robot] : []);
   const maxRobots = Math.max(0, ...data.ticks.map(f => frameCrew(f).length));
-  robotMeshes = []; carryMeshes = [];
+  // Crane box stays the default. An inchworm log (robot.feet) hides it
+  // and draws two grippers on voxel faces. Offsets match
+  // sim/inchworm.py VIEW_FOOT_OUTSET / VIEW_BODY_LIFT / VIEW_VOXEL_HALF.
+  robotMeshes = []; carryMeshes = []; robotFeet = []; robotBodies = [];
   for (let i = 0; i < maxRobots; i++) {
-    const rm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7),
-                              matRobots[i % matRobots.length]);
+    const mat = matRobots[i % matRobots.length];
+    const rm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), mat);
     const cm = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), matCarry);
-    rm.visible = cm.visible = false;
+    const footGeo = new THREE.BoxGeometry(0.42, 0.10, 0.42);
+    const fa = new THREE.Mesh(footGeo, mat);
+    const fb = new THREE.Mesh(footGeo, mat);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 1), mat);
+    rm.visible = cm.visible = fa.visible = fb.visible = body.visible = false;
     rm.renderOrder = 2;
     cm.renderOrder = 3;
-    buildGroup.add(rm, cm);
+    fa.renderOrder = fb.renderOrder = body.renderOrder = 2;
+    buildGroup.add(rm, cm, fa, fb, body);
     robotMeshes.push(rm); carryMeshes.push(cm);
+    robotFeet.push([fa, fb]); robotBodies.push(body);
   }
 
   highlight = new THREE.LineSegments(
@@ -673,6 +687,75 @@ function supportMesh(node, occ) {
     return cells.get(node.join(",")) || null;
   }
   return null;
+}
+
+function normalThree(normal) {
+  // Face normal is [level, row, col]. Three.js axes are (col, level, row).
+  return new THREE.Vector3(normal[2], normal[0], normal[1]);
+}
+
+function alignAxis(mesh, from, dir) {
+  const d = dir.clone();
+  if (d.lengthSq() < 1e-10) d.copy(from);
+  d.normalize();
+  mesh.quaternion.setFromUnitVectors(from, d);
+}
+
+/* Foot center sits just outside the face the viewer actually drew.
+   At rest that is VIEW_FOOT_OUTSET (0.56) from the cell center: the
+   0.48 half-extent plus an 0.08 gap. When exaggeration is on, the
+   voxel mesh has already been moved by alpha and maybe shrunk, so the
+   same gap is added to that drawn half-extent. */
+function drawnFace(cell, normal) {
+  const mesh = cells.get(cell.join(","));
+  const n = normalThree(normal);
+  const gap = VIEW_FOOT_OUTSET - VIEW_VOXEL_HALF;
+  const center = mesh ? mesh.position.clone() : nodePos(cell);
+  const half = mesh ? (BOX * mesh.scale.x) / 2 : HALF;
+  return {
+    pos: center.clone().add(n.clone().multiplyScalar(half + gap)),
+    n,
+    center,
+    half,
+  };
+}
+
+function placeInchworm(index, robot) {
+  robotMeshes[index].visible = false;
+  const [fa, fb] = robotFeet[index];
+  const body = robotBodies[index];
+  const centers = robot.feet.slice(0, 2).map(foot => drawnFace(foot.cell, foot.normal));
+  const meshes = [fa, fb];
+  for (let k = 0; k < 2; k++) {
+    meshes[k].position.copy(centers[k].pos);
+    alignAxis(meshes[k], new THREE.Vector3(0, 1, 0), centers[k].n);
+    meshes[k].visible = true;
+  }
+  const mid = centers[0].pos.clone().add(centers[1].pos).multiplyScalar(0.5);
+  const avg = centers[0].n.clone().add(centers[1].n);
+  if (avg.lengthSq() < 1e-8) avg.set(0, 1, 0);
+  avg.normalize();
+  let bodyPos = mid.clone().add(avg.clone().multiplyScalar(VIEW_BODY_LIFT));
+  // A corner stance's midpoint can fall inside the drawn cube. Push the
+  // body out until its center clears the drawn half-extent plus the
+  // body's own half-section.
+  for (const face of centers) {
+    const clearance = face.half + 0.16;
+    if (bodyPos.distanceTo(face.center) < clearance) {
+      const out = bodyPos.clone().sub(face.center);
+      if (out.lengthSq() < 1e-8) out.set(0, 1, 0);
+      out.normalize();
+      bodyPos.copy(face.center).add(out.multiplyScalar(clearance));
+    }
+  }
+  const span = centers[1].pos.clone().sub(centers[0].pos);
+  const length = Math.max(0.36, span.length());
+  body.scale.set(1, 1, length);
+  body.position.copy(bodyPos);
+  alignAxis(body, new THREE.Vector3(0, 0, 1), span.lengthSq() > 1e-8 ? span : avg);
+  body.visible = true;
+  carryMeshes[index].position.copy(bodyPos).add(avg.clone().multiplyScalar(0.42));
+  carryMeshes[index].visible = !!robot.carrying;
 }
 
 function setFrame(i) {
@@ -781,9 +864,12 @@ function setFrame(i) {
     const du = meta.displacement_units || "mg/k";
     const where = held.sample.worst_sag_cell ? held.sample.worst_sag_cell.join(",") : "–";
     const from = held.tick === f.tick ? "" : ` · held from tick ${held.tick}`;
+    let sagLine = `worst sag ${fmt(held.sample.worst_sag)} ${du} @ ${where}${from}`;
+    if (held.sample.worst_sag_voxels != null) {
+      sagLine += ` · voxels alone ${fmt(held.sample.worst_sag_voxels)}`;
+    }
     const pose = fraction > 0 ? " · exaggerated, normalized" : " · true geometry";
-    $("sagReadout").textContent =
-      `worst sag ${fmt(held.sample.worst_sag)} ${du} @ ${where}${from}${pose}`;
+    $("sagReadout").textContent = sagLine + pose;
     drawColorbar(mode);
     if (fraction > 0) {
       $("cbarNote").textContent =
@@ -798,7 +884,19 @@ function setFrame(i) {
   const crew = f.robots ?? (f.robot ? [f.robot] : []);
   for (let i = 0; i < robotMeshes.length; i++) {
     const robot = crew[i];
-    if (robot) {
+    const feet = robotFeet[i];
+    const body = robotBodies[i];
+    if (!robot) {
+      robotMeshes[i].visible = carryMeshes[i].visible = false;
+      if (feet) feet[0].visible = feet[1].visible = false;
+      if (body) body.visible = false;
+      continue;
+    }
+    if (robot.feet && robot.feet.length >= 2) {
+      placeInchworm(i, robot);
+    } else {
+      if (feet) feet[0].visible = feet[1].visible = false;
+      if (body) body.visible = false;
       const pos = nodePos(robot.pos);
       const mesh = robotMeshes[i];
       if (robot.pos.length === 3) {
@@ -824,8 +922,6 @@ function setFrame(i) {
       carryMeshes[i].position.copy(mesh.position);
       carryMeshes[i].position.y += ROBOT_HALF + 0.2;
       carryMeshes[i].visible = !!robot.carrying;
-    } else {
-      robotMeshes[i].visible = carryMeshes[i].visible = false;
     }
   }
   stateLabel.textContent =

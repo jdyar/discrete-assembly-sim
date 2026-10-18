@@ -134,6 +134,34 @@ class Geometry:
         """
         return ()
 
+    def reservation_keys(self, node: Node) -> tuple:
+        """Reservation-table keys a robot occupies while at ``node``.
+
+        The default is the node itself, which is what every lattice
+        shipped before on-lattice feet. A stance that grips more than
+        one face returns those faces as well, so two poses that share
+        a foot conflict even when their stance tuples differ.
+        """
+        return (node,)
+
+    def foot_cells(self, node: Node) -> tuple:
+        """Voxel cells a robot at ``node`` is standing on.
+
+        Empty for the crane / empty-cell stance: the robot's weight is
+        not in the structure. On-lattice geometries return one cell per
+        foot.
+        """
+        return ()
+
+    def sag_parameters(self) -> dict:
+        """``k`` / ``mass`` / ``g`` this geometry wants the sag gate to use.
+
+        Defaults are the unfitted model units. A geometry with a real
+        voxel mass overrides ``mass``; it does not override the robot
+        mass, which lives on the :class:`~sim.stability.StabilityPolicy`.
+        """
+        return {"k": 1.0, "k_axial": None, "k_shear": None, "mass": 1.0, "g": 1.0}
+
     def bound_factory(self):
         """A ``world -> Geometry`` factory reproducing THIS geometry's
         configuration (motion model, etc.) on another world. Callers that

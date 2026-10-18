@@ -70,14 +70,26 @@ class TimeExpandedGraph:
         # cell on an expiry gamble is how collisions happen. They are
         # walls until they plan (displacement is explicit, never implied).
         self.static_obstacles = frozenset(static_obstacles)
+        # A parked robot blocks every key of its pose. For a one-cell
+        # stance that set is the node itself, so this is the old check.
+        blocked: set = set()
+        for obstacle in self.static_obstacles:
+            blocked.update(self.geometry.reservation_keys(obstacle))
+        self._blocked = blocked
+
+    def _pose_free(self, node, t: int) -> bool:
+        for key in self.geometry.reservation_keys(node):
+            if not self.reservations.is_free(key, t, self.owner):
+                return False
+        return True
 
     def successors(self, state: TENode) -> Iterator[TENode]:
         n, t = state
         nxt_t = t + 1
-        # Wait: hold position for one tick.
-        if self.geometry.is_footing(n) and self.reservations.is_free(
-            n, nxt_t, self.owner
-        ):
+        # Wait: hold position for one tick. Every key of the pose must
+        # stay free (a shared foot is a collision even when the stance
+        # tuple differs).
+        if self.geometry.is_footing(n) and self._pose_free(n, nxt_t):
             yield TENode(n, nxt_t)
         # Move: one geometry step; destination free now and forever-free
         # of parked robots; edge free (no head-on swap); every swept
@@ -85,12 +97,13 @@ class TimeExpandedGraph:
         # transition window (both ticks — conservative, so a robot
         # departing a swept cell in the same step still conflicts).
         for nbr in self.geometry.neighbors(n):
+            nbr_keys = self.geometry.reservation_keys(nbr)
             if (
-                nbr not in self.static_obstacles
-                and self.reservations.is_free(nbr, nxt_t, self.owner)
+                all(key not in self._blocked for key in nbr_keys)
+                and self._pose_free(nbr, nxt_t)
                 and self.reservations.edge_free(n, nbr, t, self.owner)
                 and all(
-                    c not in self.static_obstacles
+                    c not in self._blocked
                     and self.reservations.is_free(c, t, self.owner)
                     and self.reservations.is_free(c, nxt_t, self.owner)
                     for c in self.geometry.move_footprint(n, nbr)

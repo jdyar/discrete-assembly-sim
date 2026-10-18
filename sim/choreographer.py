@@ -42,7 +42,7 @@ from typing import Hashable, Iterable, NamedTuple
 from .geometry import Geometry, bfs_path
 from .planner import SearchBudgetExceeded, plan_build_order
 from .reservations import OwnerId, ReservationConflict, ReservationTable
-from .stability import StabilityPolicy, is_stable, occupied_voxels
+from .stability import StabilityPolicy, is_stable, occupied_voxels, robot_stance_ok
 from .texgraph import TENode, TimeExpandedGraph
 
 Node = Hashable
@@ -114,8 +114,10 @@ def cooperative_astar(
     def at_goal(state: TENode) -> bool:
         if state.node not in goals:
             return False
+        keys = geom.reservation_keys(state.node)
         return all(
-            res.is_free(state.node, state.t + k, owner)
+            res.is_free(key, state.t + k, owner)
+            for key in keys
             for k in range(1, extra_free_ticks + 1)
         )
 
@@ -230,6 +232,7 @@ def stability_gate(
     geometry: Geometry,
     proposed_target: Node,
     policy: StabilityPolicy,
+    approach: Node | None = None,
 ) -> bool:
     """May ``proposed_target`` be placed without an unstable partial build?
 
@@ -242,10 +245,62 @@ def stability_gate(
     The frame — which axis is up, where the base is, how far a span may
     reach — comes entirely from ``policy``. This function does no
     coordinate arithmetic of its own.
+
+    When ``approach`` has foot cells (on-lattice stance) the same policy
+    also rejects the step if a foot would sit past ``max_cantilever``, or
+    if ``max_sag`` is set and the sag **including that robot's loads**
+    is over the cap. A crane stance has no foot cells, so this extra
+    check does not run and the gate stays the combinatorial screen.
+    The carried voxel is included on the structure the robot is
+    standing on (before the new block is material) and omitted after
+    the block is in the build, so its weight is not counted twice.
     """
     cells = set(occupied_voxels(geometry.world))
-    cells.add(tuple(int(coord) for coord in proposed_target))
-    return is_stable(cells, policy)
+    target = tuple(int(coord) for coord in proposed_target)
+    feet = geometry.foot_cells(approach) if approach is not None else ()
+    params = geometry.sag_parameters()
+    if feet and not robot_stance_ok(
+        cells, feet, policy, carrying=True, **params
+    )[0]:
+        return False
+    cells.add(target)
+    if not is_stable(cells, policy):
+        return False
+    if feet and not robot_stance_ok(
+        cells, feet, policy, carrying=False, **params
+    )[0]:
+        return False
+    return True
+
+
+def pin_pose(
+    table: ReservationTable,
+    geometry: Geometry,
+    owner: OwnerId,
+    node,
+    t0: int,
+    t1: int,
+    *,
+    best_effort: bool = False,
+) -> int:
+    """Lease every reservation key of ``node`` on ``[t0, t1]``.
+
+    One-cell stances have a single key, so this is :meth:`reserve_hold`.
+    A two-foot stance also holds each gripped face. Best-effort returns
+    the last tick held by **every** key (the shortest of the per-key
+    holds); a foot that could not be pinned pulls that horizon in.
+    """
+    keys = geometry.reservation_keys(node)
+    if not best_effort:
+        for key in keys:
+            table.reserve_hold(owner, key, t0, t1)
+        return t1
+    last = t1
+    for key in keys:
+        held = table.reserve_hold_best_effort(owner, key, t0, t1)
+        if held < last:
+            last = held
+    return last
 
 
 def _reserve_leg(
@@ -256,8 +311,14 @@ def _reserve_leg(
 ) -> None:
     """Lease a leg: node-per-tick + edges (reserve_path), plus every
     swept intermediate of multi-cell strides for the transition window
-    (both ticks — matching the time-expanded graph's gating exactly)."""
+    (both ticks — matching the time-expanded graph's gating exactly),
+    plus any extra reservation keys of the pose (gripped faces)."""
     table.reserve_path(owner, [s.node for s in leg], leg[0].t)
+    for state in leg:
+        for key in geometry.reservation_keys(state.node):
+            if key == state.node:
+                continue
+            table.reserve_hold(owner, key, state.t, state.t)
     for prev, cur in zip(leg, leg[1:]):
         if cur.node != prev.node:
             for c in geometry.move_footprint(prev.node, cur.node):
@@ -334,7 +395,9 @@ def plan_task(
         geometry, table, target, list(anchors) + [approach], depot
     ):
         return None
-    if stability is not None and not stability_gate(geometry, target, stability):
+    if stability is not None and not stability_gate(
+        geometry, target, stability, approach=approach
+    ):
         return None
     if not buildability_gate(geometry, table, target, remaining_cells, depot):
         return None
@@ -345,15 +408,16 @@ def plan_task(
     # (the next plan's release_owner clears it).
     try:
         _reserve_leg(owner, leg1, table, geometry)
-        table.reserve_hold(owner, depot, t_pick, t_pick)
+        pin_pose(table, geometry, owner, depot, t_pick, t_pick)
         _reserve_leg(owner, leg2, table, geometry)
-        table.reserve_hold(owner, approach, t_place, t_end + 1)  # + handoff
+        pin_pose(table, geometry, owner, approach, t_place, t_end + 1)  # + handoff
         table.reserve_deed(owner, target, t_place)
     except ReservationConflict:
         table.release_owner(owner, t_now + 1)
         return None
-    table.reserve_hold_best_effort(
-        owner, approach, t_end + 2, t_end + PARK_TICKS
+    pin_pose(
+        table, geometry, owner, approach, t_end + 2, t_end + PARK_TICKS,
+        best_effort=True,
     )
 
     steps = _path_to_steps(leg1)
@@ -390,11 +454,12 @@ def plan_walk(
     t_arrive = leg[-1].t
     try:
         _reserve_leg(owner, leg, table, geometry)
-        table.reserve_hold(owner, goal, t_arrive + 1, t_arrive + 1)
+        pin_pose(table, geometry, owner, goal, t_arrive + 1, t_arrive + 1)
     except ReservationConflict:
         table.release_owner(owner, t_now + 1)
         return None
-    table.reserve_hold_best_effort(
-        owner, goal, t_arrive + 2, t_arrive + PARK_TICKS
+    pin_pose(
+        table, geometry, owner, goal, t_arrive + 2, t_arrive + PARK_TICKS,
+        best_effort=True,
     )
     return _path_to_steps(leg)
