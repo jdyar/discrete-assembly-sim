@@ -8,6 +8,10 @@ Do not tag this until the printed-cantilever log in `docs/VALIDATION.md` has a r
 
 ### Added
 
+- Opt-in on-lattice inchworm (`sim/inchworm.py`). Both feet grip voxel faces, one foot steps, and a voxel is placed on a face reachable from that stance. The default geometry is unchanged: the robot still stands in an empty cell. Stride, span, place reach, and which faces are walkable are configuration. The module docstring separates those from the BILL-E and SOLL-E facts that were checked against the papers.
+- Robot point loads. `estimate_sag(..., point_loads=)` adds a downward force at a voxel center. A tip load `P` on a shear chain of `n` free voxels adds `P·n/k_shear` at the tip. `split_foot_loads` divides `(robot_mass + carried_mass)·g` equally across the feet. A crane snapshot has no feet, so it still adds nothing. `StabilityPolicy.max_sag` refuses an on-lattice step whose loaded sag exceeds the cap. The default for that field is off.
+- On-lattice campaign, 108 trials (`python main.py onlattice`, `docs/on_lattice.csv`). Gate off, a ratio-1 robot on the 3-voxel arm peaks at 7 against a voxels-only 6 (n = 3, no spread). The bridge inchworm is rejected, 3/3, by both the cantilever gate and the sag cap, because its only route is a one-sided deck. The crane under the cantilever gate places the far cap earlier and the peak falls from 6 to 3. Ratios 1, 3, and 10 are a sweep. SOLL-E's published ratio is stated in the summary and is not a row. `k = 1`.
+- Replay draws inchworm feet on the faces named in the log, and colors include robot loads when the sample has them. Feet follow the face the viewer drew, including when the exaggerate slider moves or shrinks that voxel. A crane log is drawn as before.
 - Optional structural stability gate (`sim/stability.py`), off unless a caller passes a `StabilityPolicy`. `is_stable` requires every voxel to face-connect to a column on the base, and it limits horizontal overhang. A refusal is the existing kickback. Deeds are not supports.
 - Small-displacement sag estimate: voxels as nodes, one lumped axial/shear spring per face, `Ku = mg`. Closed forms for a shear-chain cantilever and an axial tower (`shear_cantilever_tip_sag`, `axial_tower_compression`, `path_chain_deflection_at`). Not a gate, and not inside the search.
 - Opt-in strain log (`StructureLog` on a `RunLog`) and replay coloring: displacement or joint strain, worst-sag marker. Logs without samples play as before. Colors are the model. Default `k = 1` is not a fit. The viewer draws as-built cells unless the exaggerate slider is on. That slider sets the longest arrow as a fraction of the voxel pitch (mild value 0.20, cap 0.40) and labels the picture exaggerated and normalized.
@@ -25,7 +29,7 @@ Do not tag this until the printed-cantilever log in `docs/VALIDATION.md` has a r
 
 ### Tests
 
-169 tests (`python -m unittest`): traps, 3D repair, fuzz, examples, the structural screen, the precheck, strain logging, the bridge blueprint against its finished log, the stability-gate smoke run, and the cuboctahedral geometry.
+187 tests (`python -m unittest`): traps, 3D repair, fuzz, examples, the structural screen, the precheck, strain logging, the bridge blueprint against its finished log, the stability-gate smoke run, the cuboctahedral geometry, the inchworm gait, the tip point-load closed form, and a smoke run of the on-lattice campaign.
 
 ## [0.1.0] — 2026-07-25
 

@@ -525,8 +525,182 @@ def render(mp4: Path, gif: Path | None, gif_max: int) -> str:
     )
 
 
+def render_on_lattice(out_dir: Path) -> str:
+    """Still frames of an inchworm standing on a level-2 cantilever.
+
+    Displacement color includes the robot's point loads (ratio 3, a
+    sweep point, not a hardware mass). The default frame is true
+    geometry, so the feet sit on the as-built faces. A second frame
+    sets the longest arrow to 0.20 of a voxel pitch (the viewer's mild
+    exaggeration, capped at 0.40). Feet follow the face that was drawn.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise SystemExit("ffmpeg is not on PATH")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise SystemExit("playwright is not installed. pip install playwright") from exc
+
+    from experiments.on_lattice import build_demo_log
+
+    runs = ROOT / "runs"
+    runs.mkdir(exist_ok=True)
+    log = build_demo_log()
+    log_path = runs / "on_lattice_demo.json"
+    log.save(log_path)
+    # A frame with the robot on the arm: the last tick is parked after
+    # the build, often back on the seed. Prefer a tick whose feet are
+    # on a level-2 cell.
+    # Prefer the appended pose: both feet on adjacent level-2 tops.
+    on_arm = len(log.frames) - 1
+    for index, frame in enumerate(log.frames):
+        robot = (frame.get("robots") or [None])[0]
+        feet = (robot or {}).get("feet") or []
+        if (
+            len(feet) >= 2
+            and all(foot["normal"] == [1, 0, 0] and foot["cell"][0] >= 2 for foot in feet)
+            and feet[0]["cell"] != feet[1]["cell"]
+        ):
+            on_arm = index
+            break
+    port = _free_port()
+    httpd = _serve(port)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    shots = out_dir / "_on_lattice_frames"
+    if shots.exists():
+        shutil.rmtree(shots)
+    shots.mkdir(parents=True)
+    base = f"http://127.0.0.1:{port}/replay_viewer.html"
+    notes = []
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                channel="chrome",
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            page = browser.new_page(viewport={"width": WIDTH, "height": HEIGHT})
+            for name, deform, frame_i in (
+                ("stand", 0.0, on_arm),
+                ("sag", DEFORM_HOLD, on_arm),
+                ("start", 0.0, 0),
+                ("done", 0.0, len(log.frames) - 1),
+            ):
+                url = (
+                    f"{base}?log=runs/on_lattice_demo.json&frame={frame_i}"
+                    f"&color=displacement&deform={deform}&theta=0.55&phi=0.95&radius=6.2"
+                )
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_function(
+                    "() => window.assemblerReplay && window.assemblerReplay.ready()",
+                    timeout=45_000,
+                )
+                page.evaluate(
+                    """async ({frame, deform}) => {
+                        const v = window.assemblerReplay;
+                        v.setPlaying(false);
+                        v.setColor('displacement');
+                        v.setDeform(deform);
+                        v.setOrbit(0.55, 0.95, 6.2);
+                        v.setFrame(frame);
+                        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    }""",
+                    {"frame": frame_i, "deform": deform},
+                )
+                dest = shots / f"{name}.png"
+                page.screenshot(path=str(dest))
+                notes.append(f"{name} frame={frame_i} deform={deform}")
+            browser.close()
+    finally:
+        httpd.shutdown()
+    # Keep the standing-on-arm stills next to the other docs pictures.
+    kept = ROOT / "docs" / "on_lattice_demo.png"
+    sag = ROOT / "docs" / "on_lattice_sag.png"
+    shutil.copyfile(shots / "stand.png", kept)
+    shutil.copyfile(shots / "sag.png", sag)
+    artifact = Path("/opt/cursor/artifacts")
+    if artifact.is_dir():
+        for src in shots.glob("*.png"):
+            shutil.copyfile(src, artifact / f"on_lattice_{src.name}")
+    return f"on-lattice stills in {shots}; docs {kept} and {sag}; " + "; ".join(notes)
+
+
+def render_bridge_stills(out_dir: Path) -> str:
+    """Side view of the finished one-robot span.
+
+    Deform 0 is the as-built deck (air under midspan). Deform 0.20 is
+    the normalized exaggeration: the longest arrow is a fifth of a
+    pitch, and block size shrinks so neighbors stay apart.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise SystemExit("ffmpeg is not on PATH")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise SystemExit("playwright is not installed. pip install playwright") from exc
+
+    from main import run_bridge
+
+    runs = ROOT / "runs"
+    runs.mkdir(exist_ok=True)
+    log, _swarm = run_bridge(verbose=False)
+    n = len(log.frames)
+    port = _free_port()
+    httpd = _serve(port)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = f"http://127.0.0.1:{port}/replay_viewer.html"
+    still = ROOT / "docs" / "strain_bridge.png"
+    normalized = out_dir / "bridge_normalized.png"
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                channel="chrome",
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            url = (
+                f"{base}?log=runs/bridge.json&frame=last&color=displacement"
+                f"&deform=0&theta={BRIDGE_THETA0}&phi={BRIDGE_PHI}&radius={BRIDGE_RADIUS}"
+            )
+            _open_log(page, url)
+            last = n - 1
+            _pose(
+                page, sim=last, color="displacement", deform=0,
+                theta=BRIDGE_THETA0, phi=BRIDGE_PHI, radius=BRIDGE_RADIUS,
+            )
+            page.screenshot(path=str(still))
+            page.screenshot(path=str(out_dir / "bridge_true.png"))
+            _pose(
+                page, sim=last, color="displacement", deform=DEFORM_HOLD,
+                theta=BRIDGE_THETA0, phi=BRIDGE_PHI, radius=BRIDGE_RADIUS,
+            )
+            page.screenshot(path=str(normalized))
+            browser.close()
+    finally:
+        httpd.shutdown()
+    artifact = Path("/opt/cursor/artifacts")
+    if artifact.is_dir():
+        shutil.copyfile(out_dir / "bridge_true.png", artifact / "bridge_true.png")
+        shutil.copyfile(normalized, artifact / "bridge_normalized.png")
+    return (
+        f"bridge stills: true {still}; normalized {normalized}; "
+        f"frames={n} deform=0 and {DEFORM_HOLD}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--on-lattice",
+        action="store_true",
+        help="Capture inchworm stills instead of the 60 s crane/cuboct demo.",
+    )
+    parser.add_argument(
+        "--bridge-still",
+        action="store_true",
+        help="Capture the finished span at true geometry and at 0.20 pitch.",
+    )
     parser.add_argument(
         "--mp4",
         type=Path,
@@ -540,9 +714,14 @@ def main() -> None:
     )
     parser.add_argument("--gif-max-bytes", type=int, default=1_500_000)
     args = parser.parse_args()
-    gif = args.gif if str(args.gif) else None
     started = time.time()
-    print(render(args.mp4, gif, args.gif_max_bytes))
+    if args.on_lattice:
+        print(render_on_lattice(Path("/tmp/on-lattice-demo")))
+    elif args.bridge_still:
+        print(render_bridge_stills(Path("/tmp/bridge-still")))
+    else:
+        gif = args.gif if str(args.gif) else None
+        print(render(args.mp4, gif, args.gif_max_bytes))
     print(f"elapsed {time.time() - started:.1f} s")
 
 

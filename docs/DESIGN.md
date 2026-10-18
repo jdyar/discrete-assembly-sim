@@ -136,7 +136,24 @@ papers only:
   axis-plane: footing = empty cell face-adjacent to a solid; movement =
   orthogonal steps plus in-plane corner rounding (exactly one of the
   two between-cells solid — a corner to pivot around, not a gap to
-  cross); reach = Chebyshev ball of `reach_radius`.
+  cross); reach = Chebyshev ball of `reach_radius`. This is the
+  default. The robot stands in an empty cell and reaches out.
+- **On-lattice inchworm** (`sim/inchworm.py`,
+  `OnLatticeGeometry`) is opt-in. Both feet grip exposed voxel faces,
+  exactly one foot swings per step, and a carried voxel is placed
+  into an empty cell that shares a face with the structure and is
+  within `place_reach` of a foot. The cell outside a gripped face is
+  not a placement: that would bury the foot. Top faces are the
+  default surface. Side faces, inverted faces, stride, span, and
+  place reach are configuration. BILL-E (AIAA 2017-1876) and SOLL-E
+  (Park et al., IROS 2023, NTRS 20230011353; the transport robot in
+  Gregg et al. 2024) are the hardware the gait is abstracted from.
+  The cubic-face edges are not a replay of either joint trajectory,
+  and BILL-E walks a different lattice (vertex-connected octahedra).
+  A stance reserves both faces, so two robots that share a foot
+  conflict in the same reservation table and cooperative A*. Robot
+  weight is a point load at the foot voxels
+  (`split_foot_loads`), off unless a caller sets a mass.
 
 ## Test discipline
 

@@ -146,7 +146,10 @@ ARMADAS hardware.
 
 What this will not do
 ---------------------
-Robot weight, wind, payload, and fastener preload are not load cases.
+Wind and fastener preload are not load cases. Robot weight is not
+applied unless a caller passes ``point_loads`` (or
+:func:`robot_stance_ok` with a non-zero ``robot_mass``). The default
+solve is still uniform self-weight.
 A hollow-box roof is a span: ``max_cantilever=0`` rejects it, which is
 why the gate is off by default and why the published speedup and yield
 runs are unchanged. The solve is a dense numpy factorization. It is
@@ -220,6 +223,14 @@ class StabilityPolicy(NamedTuple):
     ``base`` is a tuple of cells so a policy stays hashable and
     comparable. An empty base with a ``ground_plane`` is the stock
     "the whole floor is plate" frame.
+
+    ``max_sag`` is an optional displacement cap in the same units as
+    :func:`estimate_sag`. ``None`` (the default) does not consult sag,
+    so a policy that only sets ``max_cantilever`` behaves as before.
+    ``robot_mass`` and ``carried_mass`` are the masses used when a
+    caller asks :func:`robot_stance_ok` to put the robot's weight on
+    its foot voxels. Both default to 0, which adds no load. They are
+    configuration: this module does not bake in a hardware mass.
     """
 
     up_axis: int
@@ -227,6 +238,9 @@ class StabilityPolicy(NamedTuple):
     ground_plane: int | None = None
     base: tuple[Cell, ...] = ()
     max_cantilever: int | None = 0
+    max_sag: float | None = None
+    robot_mass: float = 0.0
+    carried_mass: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -474,6 +488,7 @@ def estimate_sag(
     k_shear: float | None = None,
     mass: float = 1.0,
     g: float = 1.0,
+    point_loads: Iterable | None = None,
     **frame,
 ) -> SagEstimate:
     """Worst-case displacement of a partial build under self-weight.
@@ -481,6 +496,15 @@ def estimate_sag(
     See the module docstring for the spring law, the fixed-base
     boundary condition, and the closed forms. ``k`` fills in whichever
     of ``k_axial`` and ``k_shear`` is omitted.
+
+    ``point_loads`` is an optional sequence of ``(cell, force)`` pairs.
+    ``force`` is a downward magnitude (same direction as self-weight)
+    applied at that voxel's node. Omit it, or pass an empty sequence,
+    and the load is uniform self-weight only — the historical result.
+    A load on a cell that is not in the build raises :class:`ValueError`.
+    Two loads on the same cell add. The model has no rotational degree
+    of freedom, so a load at a voxel center does not become a moment
+    about a face.
 
     Raises :class:`ValueError` when the springs do not tie every voxel
     to a voxel fastened to the base (the stiffness matrix would be
@@ -540,6 +564,19 @@ def estimate_sag(
                 stiffness[ib + dof, ib + dof] += kk
                 stiffness[ia + dof, ib + dof] -= kk
                 stiffness[ib + dof, ia + dof] -= kk
+
+    for raw_cell, force in point_loads or ():
+        cell = tuple(int(x) for x in raw_cell)
+        if cell not in index:
+            raise ValueError(
+                f"point load at {cell} is not an occupied voxel of this build"
+            )
+        magnitude = float(force)
+        if magnitude < 0:
+            raise ValueError(
+                "a point load force is a downward magnitude and must be >= 0"
+            )
+        load[index[cell] * ndim + resolved.up_axis] += -resolved.up_sign * magnitude
 
     planted_set = set(planted)
     fixed = [
@@ -709,6 +746,143 @@ def axial_tower_compression(
     )
 
 
+def point_load_deflection_at(
+    index: int,
+    n_free: int,
+    *,
+    load: float,
+    stiffness: float,
+) -> float:
+    """Extra deflection at free voxel ``index`` from a tip point load.
+
+    A point load ``P`` at the tip of a one-voxel-wide chain is carried
+    by every spring from the root out through the tip. Voxel ``i``
+    (1 next to the root, ``n_free`` at the tip) therefore moves an
+    extra ``P * i / stiffness``. At the tip that is ``P * n / k``.
+    Self-weight is not included; add :func:`path_chain_deflection_at`
+    for the combined profile. The same expression is the shear-chain
+    increment (``stiffness=k_shear``) and the axial-tower increment
+    (``stiffness=k_axial``).
+    """
+    if n_free < 1 or not (1 <= index <= n_free):
+        raise ValueError(
+            f"index must be in 1..n_free (got index={index}, n_free={n_free})"
+        )
+    if stiffness <= 0:
+        raise ValueError("stiffness must be positive")
+    if load < 0:
+        raise ValueError("load must be a downward magnitude >= 0")
+    return (float(load) / float(stiffness)) * index
+
+
+def split_foot_loads(
+    foot_cells: Iterable,
+    *,
+    robot_mass: float,
+    carried_mass: float = 0.0,
+    g: float = 1.0,
+) -> tuple[tuple[Cell, float], ...]:
+    """Split a robot's weight equally across the voxels under its feet.
+
+    The downward force is ``(robot_mass + carried_mass) * g``. Each
+    listed foot contributes an equal share, so two feet on different
+    voxels each carry half, and two feet on the same voxel (different
+    faces of one block) sum to the whole force. An empty foot list or
+    a zero total returns no loads.
+
+    The equal split is a model choice. BILL-E and SOLL-E publish a
+    robot mass and, for SOLL-E, a voxel mass; they do not publish the
+    fraction of that weight on each foot.
+    """
+    if robot_mass < 0 or carried_mass < 0 or g < 0:
+        raise ValueError("robot_mass, carried_mass, and g must be >= 0")
+    cells = [tuple(int(x) for x in cell) for cell in foot_cells]
+    total = (float(robot_mass) + float(carried_mass)) * float(g)
+    if not cells or total == 0.0:
+        return ()
+    share = total / len(cells)
+    return tuple((cell, share) for cell in cells)
+
+
+def robot_stance_ok(
+    occupied_cells: Iterable,
+    foot_cells: Iterable,
+    policy: StabilityPolicy | None = None,
+    *,
+    carrying: bool = False,
+    k: float = 1.0,
+    k_axial: float | None = None,
+    k_shear: float | None = None,
+    mass: float = 1.0,
+    g: float = 1.0,
+    **frame,
+) -> tuple[bool, str]:
+    """Whether a robot may stand on ``foot_cells`` of this partial build.
+
+    No feet (the crane / ground stance) is always ok: this check is
+    opt-in and does not change a search that never stands on a voxel.
+    With feet:
+
+    * each foot voxel must be in the build and, when
+      ``max_cantilever`` is not ``None``, within that overhang; a foot
+      that does not face-connect to a grounded column is rejected;
+    * when ``max_sag`` is not ``None``, :func:`estimate_sag` including
+      the robot's point loads must come in at or under the cap.
+
+    ``carrying`` adds ``policy.carried_mass`` (the voxel in the
+    gripper) on top of ``policy.robot_mass``. Both masses default to
+    0. The comparison allows a 1e-6 absolute tolerance so a cap set
+    equal to a just-computed sag still passes.
+    """
+    feet = [tuple(int(x) for x in cell) for cell in foot_cells]
+    if not feet:
+        return True, "no foot loads"
+    resolved = _resolve_policy(policy, frame)
+    report = assess_stability(occupied_cells, resolved)
+    overhang = dict(report.overhang)
+    limit = resolved.max_cantilever
+    for cell in feet:
+        dist = overhang.get(cell)
+        if dist is None:
+            return (
+                False,
+                f"foot voxel {cell} is not face-connected to a grounded column",
+            )
+        if limit is not None and dist > limit:
+            return (
+                False,
+                f"foot voxel {cell} overhang {dist} exceeds cantilever "
+                f"limit {limit}",
+            )
+    if resolved.max_sag is None:
+        return True, "within cantilever; sag cap is off"
+    carried = resolved.carried_mass if carrying else 0.0
+    loads = split_foot_loads(
+        feet,
+        robot_mass=resolved.robot_mass,
+        carried_mass=carried,
+        g=g,
+    )
+    estimate = estimate_sag(
+        occupied_cells,
+        resolved,
+        k=k,
+        k_axial=k_axial,
+        k_shear=k_shear,
+        mass=mass,
+        g=g,
+        point_loads=loads,
+    )
+    cap = float(resolved.max_sag)
+    if estimate.worst_sag > cap + 1e-6:
+        return (
+            False,
+            f"sag {estimate.worst_sag:.6g} with robot loads exceeds "
+            f"max_sag {cap:.6g}",
+        )
+    return True, "within cantilever and sag cap"
+
+
 # -- internals ---------------------------------------------------------------
 
 
@@ -733,6 +907,9 @@ def _resolve_policy(
             "ground_plane": frame.pop("ground_plane", None),
             "base": frame.pop("base", ()),
             "max_cantilever": frame.pop("max_cantilever", 0),
+            "max_sag": frame.pop("max_sag", None),
+            "robot_mass": frame.pop("robot_mass", 0.0),
+            "carried_mass": frame.pop("carried_mass", 0.0),
         }
         if data["ground_plane"] is not None:
             data["ground_plane"] = int(data["ground_plane"])
@@ -754,6 +931,15 @@ def _resolve_policy(
         raise ValueError("max_cantilever must be >= 0, or None for no span limit")
     if limit is not None:
         data["max_cantilever"] = int(limit)
+    if data.get("max_sag") is not None and float(data["max_sag"]) < 0:
+        raise ValueError("max_sag must be >= 0, or None to leave sag uncapped")
+    if data.get("max_sag") is not None:
+        data["max_sag"] = float(data["max_sag"])
+    for key in ("robot_mass", "carried_mass"):
+        if key in data:
+            data[key] = float(data[key])
+            if data[key] < 0:
+                raise ValueError(f"{key} must be >= 0")
     return StabilityPolicy(**data)
 
 

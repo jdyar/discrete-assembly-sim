@@ -44,6 +44,7 @@ from .choreographer import (
     WAIT,
     MAX_HORIZON,
     Step,
+    pin_pose,
     plan_task,
     plan_walk,
 )
@@ -305,8 +306,9 @@ class Swarm:
         for r in self.robots:
             if not r.itinerary:
                 self.table.release_owner(r.id, nxt)
-                held_to = self.table.reserve_hold_best_effort(
-                    r.id, r.pos, nxt, nxt + HOLD_HORIZON
+                held_to = pin_pose(
+                    self.table, self.geometry, r.id, r.pos, nxt, nxt + HOLD_HORIZON,
+                    best_effort=True,
                 )
                 # Partial hold = someone's lease is inbound: keep what we
                 # could (protection until then) and get out of the way.
@@ -404,8 +406,9 @@ class Swarm:
         """Re-pin an idle robot (best effort); a partial hold marks it
         must-move — protected until the inbound lease, then displaced."""
         t = self.tick_count
-        held_to = self.table.reserve_hold_best_effort(
-            r.id, r.pos, t + 1, t + 1 + HOLD_HORIZON
+        held_to = pin_pose(
+            self.table, self.geometry, r.id, r.pos, t + 1, t + 1 + HOLD_HORIZON,
+            best_effort=True,
         )
         r.must_move = held_to < t + 1 + HOLD_HORIZON
 
@@ -606,8 +609,9 @@ class Swarm:
         t = self.tick_count
         r.itinerary = []
         self.table.release_owner(r.id, t + 1)
-        held_to = self.table.reserve_hold_best_effort(
-            r.id, r.pos, t + 1, t + 1 + HOLD_HORIZON
+        held_to = pin_pose(
+            self.table, self.geometry, r.id, r.pos, t + 1, t + 1 + HOLD_HORIZON,
+            best_effort=True,
         )
         r.must_move = held_to < t + 1 + HOLD_HORIZON
         if r.task is not None:
@@ -654,10 +658,13 @@ class Swarm:
         self.events.append((self.tick_count + 1, r.id, kind, node))
 
     def _check_collisions(self) -> None:
-        positions = [r.pos for r in self.robots]
-        if len(positions) != len(set(positions)):
+        keys = []
+        for r in self.robots:
+            keys.extend(self.geometry.reservation_keys(r.pos))
+        if len(keys) != len(set(keys)):
             raise AssertionError(
-                f"collision at tick {self.tick_count}: {positions}"
+                f"collision at tick {self.tick_count}: "
+                f"{[r.pos for r in self.robots]}"
             )
 
     def _watchdog(self) -> None:

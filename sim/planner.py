@@ -51,6 +51,7 @@ from .stability import (
     is_stable,
     necessary_stability_precheck,
     occupied_voxels,
+    robot_stance_ok,
 )
 from .world import EMPTY, VOXEL, World
 
@@ -111,6 +112,23 @@ def stability_precheck(
             max_cantilever=None,
         )
     return necessary_stability_precheck(_finished_voxels(world), stability)
+
+
+def _robot_stance_ok(geometry: Geometry, approach, occupied, stability, *, carrying: bool) -> bool:
+    """Foot-load check. No feet means the crane stance: always ok."""
+    if stability is None:
+        return True
+    feet = geometry.foot_cells(approach)
+    if not feet:
+        return True
+    ok, _reason = robot_stance_ok(
+        occupied,
+        feet,
+        stability,
+        carrying=carrying,
+        **geometry.sag_parameters(),
+    )
+    return ok
 
 
 def _approaches_for(target: Cell, geometry: Geometry) -> list[Cell]:
@@ -220,11 +238,25 @@ def plan_build_order(
         for _key, target, approach in candidates:
             if target in rejected_unstable:
                 continue
+            # The robot is still holding the block: check the structure
+            # it is standing on, with the carried mass on its feet.
+            if not _robot_stance_ok(
+                geometry, approach, occupied_voxels(world), stability, carrying=True
+            ):
+                continue
             world.occupancy[target] = VOXEL
             if stability is not None and not is_stable(
                 occupied_voxels(world), stability
             ):
                 rejected_unstable.add(target)
+                world.occupancy[target] = EMPTY
+                continue
+            # After the place the block's weight is self-weight, not a
+            # payload. A stance that only fails this is not a reason to
+            # retire the cell: another foot placement may be lighter.
+            if not _robot_stance_ok(
+                geometry, approach, occupied_voxels(world), stability, carrying=False
+            ):
                 world.occupancy[target] = EMPTY
                 continue
             # Never strand: the stance must still connect back to the depot.
@@ -277,6 +309,16 @@ def validate_plan(
             return False, f"{label}: target out of reach"
         if bfs_path(geometry, depot, {approach}) is None:
             return False, f"{label}: no path depot->approach"
+        if stability is not None:
+            ok_stance, why_stance = robot_stance_ok(
+                occupied_voxels(scratch),
+                geometry.foot_cells(approach),
+                stability,
+                carrying=True,
+                **geometry.sag_parameters(),
+            )
+            if not ok_stance:
+                return False, f"{label}: {why_stance}"
         scratch.occupancy[target] = VOXEL
         if stability is not None:
             report = assess_stability(occupied_voxels(scratch), stability)
@@ -285,6 +327,15 @@ def validate_plan(
                     False,
                     f"{label}: partial structure is not stable ({report.reason})",
                 )
+            ok_stance, why_stance = robot_stance_ok(
+                occupied_voxels(scratch),
+                geometry.foot_cells(approach),
+                stability,
+                carrying=False,
+                **geometry.sag_parameters(),
+            )
+            if not ok_stance:
+                return False, f"{label}: {why_stance}"
         if bfs_path(geometry, approach, {depot}) is None:
             return False, f"{label}: robot stranded after placement"
     if not scratch.complete:

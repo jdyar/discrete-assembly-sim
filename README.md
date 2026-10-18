@@ -18,10 +18,11 @@ git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-asse
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m unittest                 # 169 tests
+python -m unittest                 # 187 tests
 python main.py bridge              # 1 robot, gate on, strain log -> runs/bridge.json
 python main.py cuboct              # 2×2×2 cuboctahedra -> runs/cuboct.json
 python main.py stability          # 312-trial gate campaign -> docs/stability_cost.csv
+python main.py onlattice          # crane vs on-lattice, with robot weight -> docs/on_lattice.csv
 ```
 
 Open `replay_viewer.html` and drop `runs/bridge.json` on it (or serve the repo root with `python -m http.server` and it loads `runs/latest.json`). Displacement color and a marker on the worst-sag cell appear only when the log has samples. The blocks are drawn on the cells where they were placed. An exaggerate slider, off until you move it, redraws the longest arrow as a fraction of the voxel pitch. `pip install git+https://github.com/jdyar/discrete-assembly-sim.git` then `import sim` prints **0.1.0** until the tag.
@@ -51,7 +52,10 @@ The gate and the sag solver stay out of the planner unless a caller passes a `St
 - **Cuboctahedral voxels** (`sim/cuboct.py`, `python main.py cuboct`). Optional. Same six face-neighbors and the same lumped springs, so the closed forms still hold. Twelve vertices at the edge midpoints of the bounding cube, and four joint sites at the corners of the shared square. The cubic solid stays the default. Geometry only: not a calibrated model of the ARMADAS voxel ([Gregg et al. 2024](https://doi.org/10.1126/scirobotics.adi2746)).
 - **Stability precheck.** Before the order search, overhang in the *finished* structure lower-bounds every prefix. A blueprint that already fails the cantilever limit is rejected without spending the node budget. The screen does not reject a blueprint the search could return.
 
-169 tests cover the traps, the 3D repair loop, fuzz, the examples, the screen, the precheck, the strain log, the bridge span, a smoke run of the campaign, and the cuboct solid.
+- **On-lattice inchworm** (`sim/inchworm.py`). Opt-in. The default robot still stands in an empty cell. The inchworm grips two voxel faces, steps one foot at a time, and places a voxel on a face it can reach from that stance. Stride, span, place reach, and which faces are walkable are configuration; the module docstring says which of those numbers are in the BILL-E and SOLL-E papers and which are not. Robot weight is a point load at the foot voxels, also off unless a caller sets a mass.
+- **That comparison** (`python main.py onlattice`, 108 trials, `docs/on_lattice.csv`). Numbers in the next section. `k = 1`.
+
+187 tests cover the traps, the 3D repair loop, fuzz, the examples, the screen, the precheck, the strain log, the bridge span, a smoke run of each campaign, the cuboct solid, the gait, and the tip point-load closed form `P·n/k_shear`.
 
 ## Results
 
@@ -72,12 +76,38 @@ The sag drops. The build gets longer, and two robots pick up kickbacks and idle 
 
 Whole campaign: **312 trials, 202 proved feasible, 110 proved infeasible, 0 undecided.** Four fuzz shapes (seeds 1001–1004, n=4) repeat the same split. Reproduce with `python main.py stability`. The long form is [WHITEPAPER.md](WHITEPAPER.md) §6.6.
 
+## Robots that stand on the lattice
+
+The runs above leave the robot in an empty cell. Real relative robots walk on the structure. `python main.py onlattice` builds the same cantilever, bridge, and tower both ways, with the gate off, at the finished overhang, and under a sag cap. One robot, three entry seeds (n = 3), inspection off. Stiffness is `k = 1`. Sag is `mass·g/k`.
+
+Robot-to-voxel mass ratios 1, 3, and 10 are a sweep. SOLL-E's published masses (Park et al., IROS 2023, NTRS 20230011353, Table I) are a 4.8 kg cargo robot, a 4.4 kg crane robot, and a voxel of approximately 380 g, about 12.6 and 11.6. Those two are not rows. BILL-E's prototype is 520 g (AIAA 2017-1876, Table I) and that paper does not give a voxel mass, so there is no BILL-E ratio here. The gait's stride, span, and place reach are configuration; see `sim/inchworm.py`.
+
+The crane has no feet in the model, so its weight is not applied. Its two sag columns match. Gate off, peak sag during the build:
+
+| shape | crane | on-lattice ratio 1 | ratio 3 | ratio 10 |
+| --- | --- | --- | --- | --- |
+| cantilever | 6, and voxels alone 6 | 7, voxels 6 | 9 | 16 |
+| bridge | 6 (finished sag is 3) | 9, voxels 6 | 12 | 22.5 |
+| tower | 6, and voxels alone 6 | 7, voxels 6 | 9 | 16 |
+
+Each of those peaks is the same on all three seeds. Makespan is in [WHITEPAPER.md](WHITEPAPER.md) §6.7. The short version: the inchworm starts on the seed, so the arm and the tower take fewer ticks than the crane's walk in from an empty cell (cantilever median 9, range 8–11, against the crane's 16, range 15–16).
+
+On the cantilever and the tower the gates do not change the order cells are placed. The worst loaded pose is the finished structure, so a cap set to that pose has nothing earlier to reject. On the bridge the crane's search lists the far cap first, and nearest claim still builds the deck from the near pier until the cantilever gate refuses the long prefix. The place order then puts the far cap down before the last span cell (3/3), the peak drops from 6 to 3, and the makespan moves from median 32 (31–32) to median 45 (44–45). The sag cap does not do that for the crane: a crane stance has no feet, and the cap is not applied. The inchworm cannot walk the floor to the far pier. Both gates reject its only order, 3/3 seeds, at every ratio. 108 trials, 90 completed, 18 rejected, 0 undecided, 0 sag errors on the builds that ran.
+
+![Peak sag, gate off. Grey is voxels alone. Blue includes the robot. Crane weight is not in the model, so those two marks coincide. k = 1, unfitted.](docs/on_lattice_peak_sag.png)
+
+![Feasible seeds out of 3. The on-lattice bridge is rejected once either gate is on.](docs/on_lattice_feasibility.png)
+
+The still is the cantilever at ratio 3, both feet on adjacent top faces, displacement color including the robot. The blocks are drawn where they were placed. `docs/on_lattice_sag.png` is the same frame with the longest arrow at 0.20 of a voxel pitch (exaggerated and normalized; the slider stops at 0.40). The feet sit on the faces that were drawn.
+
+![Inchworm on the arm. Both feet are on top faces. Color is the spring model with the robot's weight included. k = 1.](docs/on_lattice_demo.png)
+
 Coordination results from before the gate, regenerated with the gate off, are in the whitepaper §6.1–§6.5 and the charts under `docs/`: a 2D wall gives no speedup (406 ticks at one robot and at two); a 40-voxel hollow box goes from 472 ticks at one robot to ×2.81 at five, and a 96-voxel box reaches ×4.07 at five; corrected yield holds 100% at the tested defect rates, and uncorrected swarms jam (about 15% at p=0.08 in the 3D swarm chart) instead of following (1−p).
 
 ## Limitations and open validation
 
 - **Stiffness is unfitted.** Every sag number in the campaign and in the pictures is `k = 1`. The colorbar is `mg/k` unless a run is built with `si=True` and SI inputs. There is no displacement limit inside the gate, because that limit needs a fit.
-- **The load is uniform self-weight.** No robot weight, wind, payload, or fastener preload. A defective voxel keeps full stiffness until it is removed. Horizontal displacement under self-weight is identically zero.
+- **The default load is uniform self-weight.** Robot weight is applied only when a caller passes point loads or a non-zero `robot_mass` (§6.7). Wind and fastener preload are not load cases. A defective voxel keeps full stiffness until it is removed. Horizontal displacement under these vertical loads is identically zero. The element has no rotational degree of freedom, so a foot load is a force at the voxel center.
 - **The element is a spring, not a beam.** A one-piece part whose struts bend will not follow `n(n+1)/2`. For free lengths n=6 against n=3 the shear chain predicts tip-sag ratio **3.5**; Euler–Bernoulli self-weight scales as `n⁴`, ratio **16**. That comparison is the experiment in [docs/VALIDATION.md](docs/VALIDATION.md). The specimens are specified (one-piece PLA, 20 mm frames, 3 mm struts, clamp block, tip tab, Bambu P2S, 0.2 mm layers, 3 walls, hanger loads 0–100 g). **The results table is empty.** Do not read this repository as a calibrated material model.
 - **Cuboct geometry is not cuboct mechanics.** Four fastener sites are drawn and reported. The solver still places one spring at the face center. Published ARMADAS density, strength, and modulus are not inputs. The 2013 "cuboct" lattice of vertex-connected octahedra ([Cheung & Gershenfeld](https://doi.org/10.1126/science.1240889)) is a different solid, and it is not implemented here. BILL-E walks that octahedral lattice ([Jenett & Cheung, AIAA 2017-1876](https://doi.org/10.2514/6.2017-1876)).
 - **The gate is a screen, not a proof of strength.** `max_cantilever = 0` rejects any span, including a hollow-box roof, which is why it is off by default. Feasibility of robot motion is a separate question: a blueprint the precheck accepts can still be unreachable.
@@ -86,8 +116,9 @@ Coordination results from before the gate, regenerated with the gate off, are in
 ## Layout
 
 ```
-main.py                 # demos and experiments (bridge, cuboct, stability, ...)
-sim/stability.py        # gate, sag solver, closed forms, precheck
+main.py                 # demos and experiments (bridge, cuboct, stability, onlattice, ...)
+sim/inchworm.py         # opt-in on-lattice gait; off unless a caller builds it
+sim/stability.py        # gate, sag solver, closed forms, point loads, precheck
 sim/cuboct.py           # optional cuboctahedron on the cubic grid
 sim/planner.py          # build-order search; calls the precheck when asked
 replay_viewer.html      # drop a log; colors strain when the log has it

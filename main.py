@@ -616,6 +616,11 @@ def main() -> None:
 
         stability_main(sys.argv[2:])
         return
+    elif mode == "onlattice":
+        from experiments.on_lattice import main as onlattice_main
+
+        onlattice_main(sys.argv[2:])
+        return
     elif mode == "swarm":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 2
         world = build_swarm_world()

@@ -147,15 +147,25 @@ class StructureLog:
     pitch: float = 1.0
     every: int = 1
     si: bool = False
+    # Opt-in robot weight. 0 keeps samples byte-for-shape identical to
+    # the voxels-only log. A positive mass is split across each robot's
+    # foot voxels (see sim.stability.split_foot_loads). Crane snapshots
+    # have no feet, so they still contribute nothing.
+    robot_mass: float = 0.0
+    carried_mass: float = 0.0
 
     def __post_init__(self) -> None:
         if int(self.every) < 1:
             raise ValueError("every must be >= 1")
         if self.pitch <= 0:
             raise ValueError("pitch must be positive")
+        if self.robot_mass < 0 or self.carried_mass < 0:
+            raise ValueError("robot_mass and carried_mass must be >= 0")
         # Reject a bad stiffness at construction, not halfway through a run.
         _stiffnesses(self.k, self.k_axial, self.k_shear)
         object.__setattr__(self, "every", int(self.every))
+        object.__setattr__(self, "robot_mass", float(self.robot_mass))
+        object.__setattr__(self, "carried_mass", float(self.carried_mass))
 
     @property
     def displacement_units(self) -> str:
@@ -175,7 +185,13 @@ class StructureLog:
                 "been fit to printed specimens. Displacement is in model "
                 "units of mass*g/k, not a measured sag."
             )
-        return {
+        if self.robot_mass > 0 or self.carried_mass > 0:
+            note += (
+                " Displacements include robot point loads at foot voxels"
+                " (mass split equally across the feet; a carried voxel"
+                " adds carried_mass while the gripper is closed)."
+            )
+        block = {
             "k": float(self.k),
             "k_axial": axial,
             "k_shear": shear,
@@ -190,6 +206,11 @@ class StructureLog:
             "up_sign": int(self.policy.up_sign),
             "note": note,
         }
+        if self.robot_mass > 0 or self.carried_mass > 0:
+            block["robot_mass"] = float(self.robot_mass)
+            block["carried_mass"] = float(self.carried_mass)
+            block["includes_robot_loads"] = True
+        return block
 
 
 @dataclass
@@ -206,14 +227,37 @@ class TickRecord:
 
 
 def _robot_snapshot(robot: Any) -> dict[str, Any] | None:
-    """Serialize a robot per the contract; ``None`` stays ``None``."""
+    """Serialize a robot per the contract; ``None`` stays ``None``.
+
+    A crane / empty-cell stance is exactly ``pos``, ``state``,
+    ``carrying``. An on-lattice stance adds ``feet`` and
+    ``locomotion`` so the viewer can put the grippers on voxel faces.
+    ``pos`` stays a cell (the first foot's voxel) for older readers;
+    the viewer must prefer ``feet`` when it is present, or the robot
+    draws inside that voxel.
+    """
     if robot is None:
         return None
-    return {
-        "pos": [int(x) for x in robot.pos],  # (row,col) or (level,row,col)
+    from .inchworm import is_stance, stance_faces
+
+    snap: dict[str, Any] = {
         "state": str(robot.state),
         "carrying": bool(robot.carrying),
     }
+    faces = stance_faces(robot.pos) if is_stance(robot.pos) else None
+    if faces is None:
+        snap["pos"] = [int(x) for x in robot.pos]
+        return snap
+    snap["pos"] = [int(x) for x in faces[0][0]]
+    snap["feet"] = [
+        {
+            "cell": [int(x) for x in cell],
+            "normal": [int(x) for x in normal],
+        }
+        for cell, normal in faces
+    ]
+    snap["locomotion"] = "inchworm"
+    return snap
 
 
 @dataclass
@@ -282,28 +326,31 @@ class RunLog:
             "robot": snapshots[0] if snapshots else None,  # v1 compat
             "robots": snapshots,
         }
-        sample = self._sample_structure(world)
+        sample = self._sample_structure(world, crew)
         if sample is not None:
             frame["structure"] = sample
         self.frames.append(frame)
         return rec
 
-    def _sample_structure(self, world: World) -> dict[str, Any] | None:
+    def _sample_structure(self, world: World, crew: list | None = None) -> dict[str, Any] | None:
         spec = self.structure
         if spec is None:
             return None
         cells = occupied_voxels(world)
+        loads = self._robot_loads(spec, crew)
+        # robot_mass 0: sample only when occupancy changes, as before.
+        signature = (cells, loads if spec.robot_mass or spec.carried_mass else ())
         if self._structure_seen is None:
-            self._structure_seen = cells
+            self._structure_seen = signature
             return None
-        if cells == self._structure_seen:
+        if signature == self._structure_seen:
             return None
-        self._structure_seen = cells
+        self._structure_seen = signature
         self._structure_changes += 1
         if self._structure_changes % spec.every != 0:
             return None
         try:
-            estimate = estimate_sag(
+            voxels_only = estimate_sag(
                 cells,
                 spec.policy,
                 k=spec.k,
@@ -312,9 +359,21 @@ class RunLog:
                 mass=spec.mass,
                 g=spec.g,
             )
+            estimate = voxels_only
+            if loads:
+                estimate = estimate_sag(
+                    cells,
+                    spec.policy,
+                    k=spec.k,
+                    k_axial=spec.k_axial,
+                    k_shear=spec.k_shear,
+                    mass=spec.mass,
+                    g=spec.g,
+                    point_loads=loads,
+                )
         except ValueError as exc:
             return {"error": str(exc)}
-        return {
+        sample = {
             "worst_displacement": estimate.worst_displacement,
             "worst_cell": _cell_list(estimate.worst_cell),
             "worst_sag": estimate.worst_sag,
@@ -336,6 +395,35 @@ class RunLog:
                 for joint in joint_strains(estimate, pitch=spec.pitch)
             ],
         }
+        if spec.robot_mass > 0 or spec.carried_mass > 0:
+            sample["worst_sag_voxels"] = voxels_only.worst_sag
+            sample["includes_robot_loads"] = bool(loads)
+        return sample
+
+    @staticmethod
+    def _robot_loads(spec: StructureLog, crew: list | None) -> tuple:
+        if spec.robot_mass == 0 and spec.carried_mass == 0:
+            return ()
+        from .inchworm import is_stance, stance_faces
+        from .stability import split_foot_loads
+
+        loads: list[tuple] = []
+        for robot in crew or []:
+            if robot is None or not is_stance(getattr(robot, "pos", None)):
+                continue
+            faces = stance_faces(robot.pos)
+            if faces is None:
+                continue
+            carried = spec.carried_mass if getattr(robot, "carrying", False) else 0.0
+            loads.extend(
+                split_foot_loads(
+                    (face[0] for face in faces),
+                    robot_mass=spec.robot_mass,
+                    carried_mass=carried,
+                    g=spec.g,
+                )
+            )
+        return tuple(loads)
 
     # -- export --------------------------------------------------------------
 
