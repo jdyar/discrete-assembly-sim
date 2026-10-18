@@ -1,0 +1,15 @@
+python 3.12.3  Linux
+geometry: stand-in open-front shed, not Fig. 5 coordinates
+voxels 256  seed 5  placed 251  fasten tasks 534
+published faces bolted 596 (different geometry; not a target)
+edge 304.8 mm  overhang 4  finished sag 48.7104 mass*g/k  peak along the gated order 48.7104
+k = 1.0  mass = 1.0  g = 1.0  (unfitted)
+step 20.0 s (park-2023-order-of-20s)
+feed/handoff/place/fasten 20.0/20.0/20.0/20.0 s (config)
+reported approximately 100.4 h or 4.2 days (100.8 h). Not reconciled in the manuscript. Not a fit target.
+baseline 1 feed, 1 robot/role: 42.972 h (0.428 × the 100.4 h figure), bottleneck cargo
+makespan_h by feeds (rows) and robots per role (columns):
+  feeds=1: 42.97/cargo  32.91/cargo  32.34/critical-path  32.14/critical-path  32.26/critical-path  32.26/critical-path
+  feeds=2: 41.28/cargo  31.07/cargo  30.82/critical-path  30.59/critical-path  30.69/critical-path  30.69/critical-path
+  feeds=3: 40.02/cargo  29.42/cargo  29.37/critical-path  29.13/critical-path  29.28/critical-path  29.28/critical-path
+  feeds=4: 39.15/cargo  28.54/cargo  28.36/critical-path  28.02/critical-path  28.24/critical-path  28.24/critical-path

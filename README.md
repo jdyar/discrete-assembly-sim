@@ -18,12 +18,13 @@ git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-asse
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m unittest                 # 197 tests
+python -m unittest                 # 209 tests
 python main.py bridge              # 1 robot, gate on, strain log -> runs/bridge.json
 python main.py cuboct              # 2×2×2 cuboctahedra -> runs/cuboct.json
 python main.py stability          # 312-trial gate campaign -> docs/stability_cost.csv
 python main.py onlattice          # crane vs on-lattice, with robot weight -> docs/on_lattice.csv
 python main.py scaffold           # temporary supports -> docs/scaffold_campaign.csv
+python main.py armadas            # shelter benchmark sweep -> docs/armadas_sweep.csv
 ```
 
 Open `replay_viewer.html` and drop `runs/bridge.json` on it (or serve the repo root with `python -m http.server` and it loads `runs/latest.json`). Displacement color and a marker on the worst-sag cell appear only when the log has samples. The blocks are drawn on the cells where they were placed. An exaggerate slider, off until you move it, redraws the longest arrow as a fraction of the voxel pitch. `pip install git+https://github.com/jdyar/discrete-assembly-sim.git` then `import sim` prints **0.1.0** until the tag.
