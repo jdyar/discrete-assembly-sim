@@ -79,7 +79,7 @@ from typing import Iterator
 
 from .geometry import Geometry, Node
 from .stability import robot_stance_ok
-from .world import DEFECT, EMPTY, GROUND, VOXEL
+from .world import DEFECT, EMPTY, GROUND, SCAFFOLD, VOXEL
 from .world3d import World3D
 
 # Viewer offsets, in voxel pitches. The replay viewer duplicates these
@@ -234,6 +234,15 @@ class OnLatticeGeometry(Geometry):
         self.policy = policy
         self._stance_cache: tuple | None = None
         self._ok_cache: dict = {}
+        # One plan mutates occupancy and then asks for the same stance's
+        # neighbors again (a return-to-depot search per approach). The
+        # lists depend only on occupancy and the node. Reservation checks
+        # are not in this object.
+        self._cells_cache: tuple | None = None
+        self._neighbor_cache: tuple = (None, {})
+        self._footing_cache: tuple = (None, {})
+        # Face-center distance does not depend on occupancy.
+        self._heur_cache: dict = {}
 
     # -- face geometry -------------------------------------------------------
 
@@ -249,10 +258,14 @@ class OnLatticeGeometry(Geometry):
         """True when ``cell`` is material, so a face opening onto it is internal."""
         if not self._in_bounds(cell):
             return False
-        return self.world.occupancy[cell] in (GROUND, VOXEL, DEFECT)
+        return self.world.occupancy[cell] in (GROUND, VOXEL, DEFECT, SCAFFOLD)
 
     def _is_voxel(self, cell) -> bool:
-        return self._in_bounds(cell) and self.world.occupancy[cell] in (VOXEL, DEFECT)
+        return self._in_bounds(cell) and self.world.occupancy[cell] in (
+            VOXEL,
+            DEFECT,
+            SCAFFOLD,
+        )
 
     def _exposed(self, cell, normal) -> bool:
         if not self._is_voxel(cell):
@@ -390,7 +403,7 @@ class OnLatticeGeometry(Geometry):
         for level in range(self.world.levels):
             for row in range(self.world.rows):
                 for col in range(self.world.cols):
-                    if occ[level, row, col] not in (VOXEL, DEFECT):
+                    if occ[level, row, col] not in (VOXEL, DEFECT, SCAFFOLD):
                         continue
                     cell = (level, row, col)
                     for normal in _unit_normals():
@@ -439,24 +452,53 @@ class OnLatticeGeometry(Geometry):
         return ok
 
     def _voxel_tuples(self) -> tuple:
+        key = self.world.occupancy.tobytes()
+        cached = self._cells_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
         occ = self.world.occupancy
         found = []
         for level in range(self.world.levels):
             for row in range(self.world.rows):
                 for col in range(self.world.cols):
-                    if occ[level, row, col] in (VOXEL, DEFECT):
+                    if occ[level, row, col] in (VOXEL, DEFECT, SCAFFOLD):
                         found.append((level, row, col))
-        return tuple(found)
+        result = tuple(found)
+        self._cells_cache = (key, result)
+        return result
 
     # -- Geometry interface --------------------------------------------------
 
     def is_footing(self, node) -> bool:
-        faces = stance_faces(node)
-        if faces is None or not self._valid_pair(*faces):
-            return False
-        return self._structurally_ok(node)
+        key = self.world.occupancy.tobytes()
+        cache = self._footing_cache
+        if cache[0] != key:
+            cache = (key, {})
+            self._footing_cache = cache
+        hit = cache[1].get(node)
+        if hit is None:
+            faces = stance_faces(node)
+            hit = (
+                faces is not None
+                and self._valid_pair(*faces)
+                and self._structurally_ok(node)
+            )
+            cache[1][node] = hit
+        return hit
 
     def neighbors(self, node) -> Iterator[Node]:
+        key = self.world.occupancy.tobytes()
+        cache = self._neighbor_cache
+        if cache[0] != key:
+            cache = (key, {})
+            self._neighbor_cache = cache
+        hit = cache[1].get(node)
+        if hit is None:
+            hit = tuple(self._neighbor_list(node))
+            cache[1][node] = hit
+        yield from hit
+
+    def _neighbor_list(self, node) -> Iterator[Node]:
         faces = stance_faces(node)
         if faces is None or not self.is_footing(node):
             return
@@ -538,7 +580,13 @@ class OnLatticeGeometry(Geometry):
                             continue
                         if not self._in_bounds(target):
                             continue
-                        if self.world.occupancy[target] != EMPTY:
+                        # Empty cells are placements. A scaffold voxel is
+                        # a removal target: the same stance that could
+                        # have put it there can take it back. Other
+                        # solids stay out of reach so a placed blueprint
+                        # cell is not a second placement.
+                        occ = self.world.occupancy[target]
+                        if occ != EMPTY and occ != SCAFFOLD:
                             continue
                         if not self._against_structure(target):
                             continue
@@ -568,6 +616,10 @@ class OnLatticeGeometry(Geometry):
         return []
 
     def heuristic_distance(self, a, b) -> int:
+        key = (a, b)
+        hit = self._heur_cache.get(key)
+        if hit is not None:
+            return hit
         stride = self.config.stride
         if is_stance(a) and is_stance(b):
             dist = min(
@@ -575,15 +627,21 @@ class OnLatticeGeometry(Geometry):
                 for fa in stance_faces(a)
                 for fb in stance_faces(b)
             )
-            return _ceil_div(dist, stride)
-        cells_a = self._anchor_cells(a)
-        cells_b = self._anchor_cells(b)
-        if not cells_a or not cells_b:
-            return 0
-        dist = min(
-            max(abs(x - y) for x, y in zip(p, q)) for p in cells_a for q in cells_b
-        )
-        return _ceil_div(dist, stride)
+            result = _ceil_div(dist, stride)
+        else:
+            cells_a = self._anchor_cells(a)
+            cells_b = self._anchor_cells(b)
+            if not cells_a or not cells_b:
+                result = 0
+            else:
+                dist = min(
+                    max(abs(x - y) for x, y in zip(p, q))
+                    for p in cells_a
+                    for q in cells_b
+                )
+                result = _ceil_div(dist, stride)
+        self._heur_cache[key] = result
+        return result
 
     def _anchor_cells(self, node) -> tuple:
         if is_stance(node):
@@ -603,6 +661,7 @@ class OnLatticeGeometry(Geometry):
             GROUND,
             VOXEL,
             DEFECT,
+            SCAFFOLD,
         )
         anchors = self._anchor_cells(depot)
         if anchors:

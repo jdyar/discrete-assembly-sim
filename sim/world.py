@@ -22,6 +22,10 @@ EMPTY = 0
 GROUND = 1
 VOXEL = 2
 DEFECT = 3  # voxel placed in the right cell but badly bonded (Slice 2)
+# Temporary support. Solid for footing, load, and sag; not part of the
+# blueprint, so it does not count toward completion and is removed after
+# the permanent structure can stand on its own.
+SCAFFOLD = 4
 
 
 class World:
@@ -75,24 +79,35 @@ class World:
     def is_empty(self, cell: Cell) -> bool:
         return self.occupancy[cell] == EMPTY
 
-    def place_voxel(self, cell: Cell, defective: bool = False) -> None:
+    def place_voxel(
+        self, cell: Cell, defective: bool = False, scaffold: bool = False
+    ) -> None:
         """Put a voxel in an empty cell. Raises if the cell is taken.
 
         A ``defective`` voxel occupies the cell and is crawlable like any
         solid, but does not count toward completion — it must be removed
         and replaced. Whether it is defective is only observable via
         :meth:`is_defective` (i.e. by inspecting).
+
+        ``scaffold=True`` writes :data:`SCAFFOLD` instead of a permanent
+        voxel. Scaffold carries load and can be walked on, and it is not
+        a blueprint cell. It cannot also be defective.
         """
+        if defective and scaffold:
+            raise ValueError("a scaffold voxel is not a defective permanent voxel")
         if not self.is_empty(cell):
             raise ValueError(f"cell {cell} is not empty")
-        self.occupancy[cell] = DEFECT if defective else VOXEL
+        if scaffold:
+            self.occupancy[cell] = SCAFFOLD
+        else:
+            self.occupancy[cell] = DEFECT if defective else VOXEL
 
     def is_defective(self, cell: Cell) -> bool:
         return self.occupancy[cell] == DEFECT
 
     def remove_voxel(self, cell: Cell) -> None:
-        """Take a voxel (good or defective) back out of the lattice."""
-        if self.occupancy[cell] not in (VOXEL, DEFECT):
+        """Take a voxel (good, defective, or scaffold) back out of the lattice."""
+        if self.occupancy[cell] not in (VOXEL, DEFECT, SCAFFOLD):
             raise ValueError(f"cell {cell} holds no voxel")
         self.occupancy[cell] = EMPTY
 

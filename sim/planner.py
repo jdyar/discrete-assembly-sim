@@ -45,6 +45,7 @@ from typing import Callable, NamedTuple
 
 from .geometry import Geometry, SquareLattice2D, bfs_path, bfs_reachable
 from .stability import (
+    SagCap,
     StabilityPolicy,
     StabilityPrecheck,
     assess_stability,
@@ -52,6 +53,7 @@ from .stability import (
     necessary_stability_precheck,
     occupied_voxels,
     robot_stance_ok,
+    sag_within,
 )
 from .world import EMPTY, VOXEL, World
 
@@ -151,6 +153,7 @@ def plan_build_order(
     *,
     stability: StabilityPolicy | None = None,
     precheck: bool = True,
+    sag: SagCap | None = None,
 ) -> list[Task] | None:
     """Search for a complete, valid placement order for the blueprint.
 
@@ -179,6 +182,14 @@ def plan_build_order(
     that fails it is not retried from another approach in that state.
     Leave it ``None`` (the default) to keep the no-gravity search.
 
+    ``sag``, when given, is a displacement cap on every prefix (and on
+    the finished set, as a necessary condition). Units are those of
+    :func:`~sim.stability.estimate_sag`: with the default ``SagCap``
+    that is ``mass·g/k`` at ``k = 1``, which is not a fit. A singular
+    prefix fails the cap. ``sag`` requires ``stability`` (the frame).
+    Leave it ``None`` to skip the solve, including inside the
+    buildability gate's re-search unless that caller passes a cap.
+
     ``precheck=False`` skips only the finished-structure screen. The
     per-prefix gate inside the search stays. The unscreened search cannot
     accept a blueprint the screen rejects, because the finished prefix
@@ -186,6 +197,8 @@ def plan_build_order(
     budget. Tests use that to check the screen against an exhaustive
     search.
     """
+    if sag is not None and stability is None:
+        raise ValueError("a sag cap needs a StabilityPolicy for the frame")
     if world.defect_count:
         # Contract (Slice 2): the robot removes a defect before requesting a
         # replan, so the planner only ever sees clean worlds. A DEFECT cell
@@ -204,11 +217,14 @@ def plan_build_order(
         screen = stability_precheck(world, stability)
         if screen.rejected:
             return None
+        if sag is not None and not sag_within(_finished_voxels(world), stability, sag):
+            return None
 
     geometry = geometry_factory(world)
     dead: set[frozenset[Cell]] = set()
     nodes = 0
     plan: list[Task] = []
+    sag_cache: dict[frozenset[Cell], bool] = {}
 
     def dfs(remaining: frozenset[Cell]) -> bool:
         nonlocal nodes
@@ -251,6 +267,16 @@ def plan_build_order(
                 rejected_unstable.add(target)
                 world.occupancy[target] = EMPTY
                 continue
+            if sag is not None:
+                placed = frozenset(occupied_voxels(world))
+                ok = sag_cache.get(placed)
+                if ok is None:
+                    ok = sag_within(placed, stability, sag)
+                    sag_cache[placed] = ok
+                if not ok:
+                    rejected_unstable.add(target)
+                    world.occupancy[target] = EMPTY
+                    continue
             # After the place the block's weight is self-weight, not a
             # payload. A stance that only fails this is not a reason to
             # retire the cell: another foot placement may be lighter.
@@ -285,6 +311,7 @@ def validate_plan(
     geometry_factory: GeometryFactory = SquareLattice2D,
     *,
     stability: StabilityPolicy | None = None,
+    sag: SagCap | None = None,
 ) -> tuple[bool, str]:
     """Re-simulate ``tasks`` against footing/reach/round-trip rules.
 
@@ -292,8 +319,11 @@ def validate_plan(
     depot -> approach path, footing at the approach, target within reach and
     empty, and approach -> depot path after placing. When ``stability`` is
     set, each prefix must also pass :func:`~sim.stability.is_stable`.
-    Returns (ok, reason).
+    When ``sag`` is set, each prefix must also pass
+    :func:`~sim.stability.sag_within`. Returns (ok, reason).
     """
+    if sag is not None and stability is None:
+        raise ValueError("a sag cap needs a StabilityPolicy for the frame")
     scratch = world.copy()
     geometry = geometry_factory(scratch)
 
@@ -327,6 +357,10 @@ def validate_plan(
                     False,
                     f"{label}: partial structure is not stable ({report.reason})",
                 )
+            if sag is not None and not sag_within(
+                occupied_voxels(scratch), stability, sag
+            ):
+                return False, f"{label}: partial structure exceeds the sag cap"
             ok_stance, why_stance = robot_stance_ok(
                 occupied_voxels(scratch),
                 geometry.foot_cells(approach),

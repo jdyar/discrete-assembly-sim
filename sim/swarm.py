@@ -45,13 +45,15 @@ from .choreographer import (
     MAX_HORIZON,
     Step,
     pin_pose,
+    plan_remove_task,
     plan_task,
     plan_walk,
 )
 from .geometry import Geometry, SquareLattice2D
 from .planner import _approaches_for, plan_build_order
 from .reservations import ReservationConflict, ReservationTable
-from .world import World
+from .stability import SagCap
+from .world import SCAFFOLD, World
 
 Node = Hashable
 
@@ -90,6 +92,7 @@ class Sequencer:
         claim_ahead: int = 6,
         geometry_factory=SquareLattice2D,
         stability=None,
+        operations: list[tuple[str, Node]] | None = None,
     ) -> None:
         self.world = world
         self.depot = depot
@@ -99,10 +102,48 @@ class Sequencer:
         self.queue: list[Node] = []
         self.claimed: set[Node] = set()
         self.needs_resequence = False
-        self.resequence()
+        # Scripted place-then-remove. Cells are unique within a phase, so
+        # the queue can stay a list of nodes. Removals are loaded only
+        # after every place in the script has been carried out.
+        self.scripted = operations is not None
+        self._script_places: list[Node] = []
+        self._script_removes: list[Node] = []
+        self.phase = "place"
+        if operations is not None:
+            self._script_places = [cell for op, cell in operations if op == "place"]
+            self._script_removes = [cell for op, cell in operations if op == "remove"]
+            self.resequence()
+        else:
+            self.resequence()
 
     def resequence(self) -> None:
-        """Re-derive the build order for everything not yet built."""
+        """Re-derive the build order for everything not yet built.
+
+        A scripted run does not call the planner again. It reloads the
+        places that are still empty, or the removals that are still
+        standing once every scripted place has landed.
+        """
+        if self.scripted:
+            from .world import EMPTY
+
+            self.claimed.clear()
+            places_left = [
+                cell
+                for cell in self._script_places
+                if self.world.occupancy[cell] == EMPTY
+            ]
+            removes_left = [
+                cell
+                for cell in self._script_removes
+                if self.world.occupancy[cell] == SCAFFOLD
+            ]
+            if places_left:
+                self.phase = "place"
+                self.queue = places_left
+            else:
+                self.phase = "remove"
+                self.queue = removes_left
+            return
         tasks = plan_build_order(
             self.world,
             self.depot,
@@ -112,6 +153,21 @@ class Sequencer:
         if tasks is None:
             raise SwarmStuck("sequencer: no feasible build order exists")
         self.queue = [t.cell for t in tasks if t.cell not in self.claimed]
+
+    def note_progress(self) -> None:
+        """Load scaffold removals once every scripted place has landed."""
+        if (
+            self.scripted
+            and self.phase == "place"
+            and not self.queue
+            and not self.claimed
+        ):
+            self.phase = "remove"
+            self.queue = [
+                cell
+                for cell in self._script_removes
+                if self.world.occupancy[cell] == SCAFFOLD
+            ]
 
     def claim(
         self, near: Node, geometry: Geometry, skip: set | None = None
@@ -138,6 +194,7 @@ class Sequencer:
 
     def complete(self, cell: Node) -> None:
         self.claimed.discard(cell)
+        self.note_progress()
 
     def repair(self, cell: Node) -> None:
         """A placed cell went bad and was removed: resequence from the
@@ -175,6 +232,7 @@ class SwarmRobot:
         self.task: Node | None = None
         self.must_move = False  # spot lost to another's lease: escape now
         self.claim_cooldown: dict = {}  # cell -> tick until which not to re-claim
+        self.task_kind = "place"  # "remove" for a scripted scaffold removal
         self.storage: Node = start  # assigned park node (ARMADAS storage location)
         self.backoff_until = 0  # after a kickback: retreat before re-claiming
 
@@ -198,6 +256,9 @@ class Swarm:
         claim_ahead: int = 6,
         geometry_factory=SquareLattice2D,
         stability=None,
+        operations: list[tuple[str, Node]] | None = None,
+        scaffold_cells: tuple | set = (),
+        sag: SagCap | None = None,
     ) -> None:
         if len(set(starts)) != len(starts):
             raise ValueError("robot starts must be distinct")
@@ -207,8 +268,15 @@ class Swarm:
         self.table = ReservationTable()
         self.robots = [SwarmRobot(i, s) for i, s in enumerate(starts)]
         self.stability = stability
+        self.sag = sag
+        self.scaffold_cells = frozenset(scaffold_cells)
         self.sequencer = Sequencer(
-            world, depot, claim_ahead, geometry_factory, stability=stability
+            world,
+            depot,
+            claim_ahead,
+            geometry_factory,
+            stability=stability,
+            operations=operations,
         )
         self.defect_p = defect_p
         self.defect_cells = set(defect_cells or ())
@@ -261,7 +329,21 @@ class Swarm:
             return d_depot + d_bp
 
         candidates.sort(key=score, reverse=True)
-        chosen = candidates[: len(self.robots)]
+        # One-cell stances have one key, so distinct nodes are already
+        # disjoint. A two-foot stance also reserves each gripped face:
+        # two storage poses that share a foot cannot both be occupied,
+        # and a pose that shares a foot with the depot walls the depot
+        # for every other robot. Skip those.
+        used_keys = set(self.geometry.reservation_keys(self.depot))
+        chosen = []
+        for node in candidates:
+            keys = self.geometry.reservation_keys(node)
+            if any(key in used_keys for key in keys):
+                continue
+            chosen.append(node)
+            used_keys.update(keys)
+            if len(chosen) == len(self.robots):
+                break
         # Nearest-start matching (greedy) so robots don't cross each other
         # just to park.
         unmatched = list(self.robots)
@@ -279,6 +361,8 @@ class Swarm:
 
     @property
     def done(self) -> bool:
+        if any(self.world.occupancy[cell] == SCAFFOLD for cell in self.scaffold_cells):
+            return False
         return self.world.complete and self.sequencer.exhausted
 
     @property
@@ -374,21 +458,40 @@ class Swarm:
         stances = _approaches_for(cell, self.geometry)
         anchors = [o.anchor for o in self.robots if o.id != r.id]
         self.table.release_owner(r.id, t + 1)  # drop the phase-0 hold
-        plan = plan_task(
-            r.id,
-            r.pos,
-            t,
-            cell,
-            stances,
-            self.geometry,
-            self.table,
-            self.depot,
-            anchors,
-            self.inspect_enabled,
-            static_obstacles=self._obstacles_for(r),
-            remaining_cells=frozenset(self.sequencer.queue),
-            stability=self.stability,
-        )
+        removing = self.sequencer.scripted and self.sequencer.phase == "remove"
+        if removing:
+            plan = plan_remove_task(
+                r.id,
+                r.pos,
+                t,
+                cell,
+                stances,
+                self.geometry,
+                self.table,
+                self.depot,
+                anchors,
+                static_obstacles=self._obstacles_for(r),
+                stability=self.stability,
+                sag=self.sag,
+            )
+        else:
+            plan = plan_task(
+                r.id,
+                r.pos,
+                t,
+                cell,
+                stances,
+                self.geometry,
+                self.table,
+                self.depot,
+                anchors,
+                self.inspect_enabled,
+                static_obstacles=self._obstacles_for(r),
+                remaining_cells=frozenset(self.sequencer.queue),
+                stability=self.stability,
+                sag=self.sag,
+                check_buildability=not self.sequencer.scripted,
+            )
         if plan is None:
             self._try_hold(r)
             self.sequencer.kickback(cell)
@@ -399,6 +502,7 @@ class Swarm:
             return
         r.itinerary = list(plan.steps)
         r.task = cell
+        r.task_kind = "remove" if removing else "place"
         r.state = "TASKED"
         self._event(r, "claim", cell)
 
@@ -487,6 +591,8 @@ class Swarm:
         )
 
     def _is_blueprint(self, node: Node) -> bool:
+        if node in self.scaffold_cells:
+            return True
         try:
             return bool(self.world.blueprint[node])
         except (IndexError, TypeError):
@@ -563,8 +669,11 @@ class Swarm:
             r.state = "PICK"
             self._event(r, "pick", step.node)
         elif step.action == PLACE:
-            defective = self._roll_defect(step.target)
-            self.world.place_voxel(step.target, defective=defective)
+            scaffold = step.target in self.scaffold_cells
+            defective = False if scaffold else self._roll_defect(step.target)
+            self.world.place_voxel(
+                step.target, defective=defective, scaffold=scaffold
+            )
             r.carrying = False
             r.state = "PLACE"
             self._event(r, "place", step.target)
@@ -586,6 +695,12 @@ class Swarm:
             self.world.remove_voxel(step.target)
             self.table.clear_deed(step.target)
             r.state = "REMOVE"
+            if r.task_kind == "remove":
+                self._event(r, "scaffold_removed", step.target)
+                self.sequencer.complete(step.target)
+                r.task = None
+                r.task_kind = "place"
+                return
             self._event(r, "defect_removed", step.target)
             self.sequencer.repair(step.target)
             r.task = None

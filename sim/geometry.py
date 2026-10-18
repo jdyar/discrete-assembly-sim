@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Hashable, Iterable, Iterator, Protocol, runtime_checkable
 
-from .world import DEFECT, EMPTY, GROUND, VOXEL, World
+from .world import DEFECT, EMPTY, GROUND, SCAFFOLD, VOXEL, World
 
 Node = Hashable
 
@@ -265,7 +265,7 @@ class SquareLattice2D(Geometry):
     - **Reach**: the 8 cells surrounding the stance (symmetric).
     """
 
-    _SOLIDS = (GROUND, VOXEL, DEFECT)
+    _SOLIDS = (GROUND, VOXEL, DEFECT, SCAFFOLD)
 
     def __init__(self, world: World) -> None:
         self.world = world

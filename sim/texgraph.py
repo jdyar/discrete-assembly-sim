@@ -76,9 +76,17 @@ class TimeExpandedGraph:
         for obstacle in self.static_obstacles:
             blocked.update(self.geometry.reservation_keys(obstacle))
         self._blocked = blocked
+        # One plan does not move voxels, so neighbor lists and stride
+        # footprints depend only on the node. Memoizing them keeps a
+        # long-stride search from rebuilding the same base-step BFS at
+        # every tick of the horizon. The reservation checks stay live.
+        self._footing: dict = {}
+        self._neighbors: dict = {}
+        self._footprint: dict = {}
+        self._keys: dict = {}
 
     def _pose_free(self, node, t: int) -> bool:
-        for key in self.geometry.reservation_keys(node):
+        for key in self._reservation_keys(node):
             if not self.reservations.is_free(key, t, self.owner):
                 return False
         return True
@@ -89,15 +97,15 @@ class TimeExpandedGraph:
         # Wait: hold position for one tick. Every key of the pose must
         # stay free (a shared foot is a collision even when the stance
         # tuple differs).
-        if self.geometry.is_footing(n) and self._pose_free(n, nxt_t):
+        if self._is_footing(n) and self._pose_free(n, nxt_t):
             yield TENode(n, nxt_t)
         # Move: one geometry step; destination free now and forever-free
         # of parked robots; edge free (no head-on swap); every swept
         # intermediate cell (multi-cell strides) free across the
         # transition window (both ticks — conservative, so a robot
         # departing a swept cell in the same step still conflicts).
-        for nbr in self.geometry.neighbors(n):
-            nbr_keys = self.geometry.reservation_keys(nbr)
+        for nbr in self._neighbor_list(n):
+            nbr_keys = self._reservation_keys(nbr)
             if (
                 all(key not in self._blocked for key in nbr_keys)
                 and self._pose_free(nbr, nxt_t)
@@ -106,7 +114,34 @@ class TimeExpandedGraph:
                     c not in self._blocked
                     and self.reservations.is_free(c, t, self.owner)
                     and self.reservations.is_free(c, nxt_t, self.owner)
-                    for c in self.geometry.move_footprint(n, nbr)
+                    for c in self._footprint_of(n, nbr)
                 )
             ):
                 yield TENode(nbr, nxt_t)
+
+    def _is_footing(self, node: Node) -> bool:
+        hit = self._footing.get(node)
+        if hit is None:
+            hit = self.geometry.is_footing(node)
+            self._footing[node] = hit
+        return hit
+
+    def _neighbor_list(self, node: Node) -> tuple:
+        hit = self._neighbors.get(node)
+        if hit is None:
+            hit = tuple(self.geometry.neighbors(node))
+            self._neighbors[node] = hit
+        return hit
+
+    def _footprint_of(self, a: Node, b: Node) -> tuple:
+        key = (a, b)
+        if key not in self._footprint:
+            self._footprint[key] = self.geometry.move_footprint(a, b)
+        return self._footprint[key]
+
+    def _reservation_keys(self, node: Node) -> tuple:
+        hit = self._keys.get(node)
+        if hit is None:
+            hit = self.geometry.reservation_keys(node)
+            self._keys[node] = hit
+        return hit
