@@ -83,6 +83,22 @@ the cubic voxel grid is confirmed over strut-level cuboct geometry.
 
 ## Session log
 
+### 2026-10-17 — v0.2 milestone 2: strain in the run log and the viewer
+
+Opt-in only. `StructureLog` on a `RunLog` samples `estimate_sag` when the
+occupied set changes (not every tick), every `every` changes, and writes
+per-voxel displacement plus a per-joint strain proxy (relative
+displacement / pitch, axial vs shear) onto that frame. Default runs do
+not grow the key. A singular partial build is an `error` string on the
+frame, not a crashed run. `joint_strains` is the definition the log and
+the tests share; the shear-chain closed form checks the proxy. The
+viewer colors by displacement or by the worst incident joint strain,
+draws a colorbar labeled `mg/k` unless `si=True`, exaggerates deflection
+with a scale slider, and cages `worst_sag_cell`. Old logs still load.
+`python main.py bridge` is a two-pier deck with the gate on
+(`max_cantilever=3`) and the sampler on at the default stiffness of 1.
+The picture is not a calibrated measurement. 135 tests.
+
 ### 2026-10-17 — v0.2 milestone 1: structural stability gate (off by default)
 
 `sim/stability.py`. `is_stable` requires every voxel to face-connect to

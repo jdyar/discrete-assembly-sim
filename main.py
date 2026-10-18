@@ -9,6 +9,7 @@ log goes to runs/latest.json for the replay viewer.
     python main.py yield      # slice 2 experiment: yield-vs-p chart
     python main.py slice1     # clean build, no defects, + ticks chart
     python main.py slice0     # the old ugly loop (no robot)
+    python main.py bridge     # stability gate on, strain log -> runs/bridge.json
 """
 
 from __future__ import annotations
@@ -197,6 +198,8 @@ def run_swarm_build(
     correction: bool = True,
     max_ticks: int = 8000,
     verbose: bool = True,
+    stability=None,
+    structure=None,
 ):
     """Slice 3: N robots, shared blueprint, choreographed by reservations."""
     from sim.swarm import Swarm
@@ -208,8 +211,9 @@ def run_swarm_build(
         defect_p=defect_p,
         rng=random.Random(seed),
         inspect_enabled=correction,
+        stability=stability,
     )
-    log = RunLog()
+    log = RunLog(structure=structure)
     log.meta.update(
         depot=list(DEPOT), n_robots=n_robots, defect_p=defect_p,
         seed=seed, correction=correction,
@@ -259,6 +263,8 @@ def run_swarm3d_build(
     geometry_factory=None,
     depot=None,
     starts=None,
+    stability=None,
+    structure=None,
 ):
     """Slice 4a/4b: N robots, 3D structure, same choreographer."""
     from sim.geometry3d import CubicLattice3D
@@ -273,8 +279,9 @@ def run_swarm3d_build(
         rng=random.Random(seed),
         inspect_enabled=correction,
         geometry_factory=geometry_factory or CubicLattice3D,
+        stability=stability,
     )
-    log = RunLog()
+    log = RunLog(structure=structure)
     log.meta.update(
         depot=list(depot or DEPOT3D), n_robots=n_robots, defect_p=defect_p,
         seed=seed, correction=correction,
@@ -431,6 +438,90 @@ def knee_vs_size_experiment(
     print(f"chart: {chart}")
 
 
+# Two piers, deck at level 2 so the span is not fastened to the floor
+# (every level-1 cell would be planted on the stock ground plane).
+# Columns 3 and 9 are the piers; the midspan column is 6, three
+# horizontal steps from either pier. Two rows so the deck reads as a
+# deck. 4 pier voxels + 14 deck voxels.
+BRIDGE_ROWS = (2, 3)
+BRIDGE_PIER_COLS = (3, 9)
+BRIDGE_DECK_COLS = range(3, 10)
+BRIDGE_CANTILEVER = 3
+BRIDGE_DEPOT = (1, 1, 1)
+BRIDGE_STARTS = [(1, 5, 12)]
+
+
+def build_bridge_world():
+    """Small two-pier bridge. The deck is a span the sag model can show.
+
+    Level 0 is the ground plane. Piers occupy level 1. The deck is level
+    2, in the air, so only the pier tops are column-supported and the
+    middle of the deck is the cantilever. ``max_cantilever`` has to be
+    at least :data:`BRIDGE_CANTILEVER` or the stability gate refuses the
+    span — which is the point of running this demo with the gate on.
+    """
+    from sim.world3d import World3D
+
+    world = World3D(levels=4, rows=7, cols=14)
+    for row in BRIDGE_ROWS:
+        for col in BRIDGE_PIER_COLS:
+            world.blueprint[1, row, col] = True
+        for col in BRIDGE_DECK_COLS:
+            world.blueprint[2, row, col] = True
+    return world
+
+
+def run_bridge(verbose: bool = True):
+    """Build the bridge with the stability gate on and strain logging on.
+
+    One robot, no defects. Stiffness, mass, and g stay at the model
+    defaults (1), so displacements in the log are in units of ``mg/k``
+    and have not been fit to a printed specimen. Writes ``runs/bridge.json``.
+    """
+    from sim.geometry3d import CubicLattice3D
+    from sim.metrics import StructureLog
+
+    world = build_bridge_world()
+    policy = CubicLattice3D(world).stability_policy(BRIDGE_CANTILEVER)
+    structure = StructureLog(policy, k=1.0, mass=1.0, g=1.0, pitch=1.0, every=1)
+    log, swarm = run_swarm3d_build(
+        world,
+        n_robots=1,
+        depot=BRIDGE_DEPOT,
+        starts=BRIDGE_STARTS,
+        stability=policy,
+        structure=structure,
+        verbose=False,
+        max_ticks=8000,
+    )
+    if not world.complete:
+        raise RuntimeError(
+            f"bridge did not finish: {world.built_count}/{world.blueprint_count} "
+            f"ticks={swarm.tick_count} kickbacks={swarm.kickbacks}"
+        )
+    saved = log.save("runs/bridge.json")
+    samples = [f for f in log.frames if "structure" in f and "error" not in f["structure"]]
+    last = samples[-1]["structure"] if samples else None
+    if verbose:
+        from sim.render import render_ascii3d
+
+        print(render_ascii3d(world))
+        print(
+            f"bridge: placed={world.built_count}/{world.blueprint_count} "
+            f"ticks={swarm.tick_count} kickbacks={swarm.kickbacks}"
+        )
+        print(f"bridge log: {saved}  ({len(samples)} structural samples)")
+        if last is not None:
+            print(
+                f"final worst sag {last['worst_sag']:.4f} mg/k "
+                f"at {last['worst_sag_cell']} "
+                f"(model estimate, stiffness not fit)"
+            )
+        print("open replay_viewer.html and drop runs/bridge.json")
+        print("  color: displacement or joint strain; slider exaggerates sag")
+    return log, swarm
+
+
 def main() -> None:
     import sys
 
@@ -452,6 +543,8 @@ def main() -> None:
     elif mode == "knee3d":
         knee_vs_size_experiment()
         return
+    elif mode == "bridge":
+        log, _swarm = run_bridge()
     elif mode == "swarm":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 2
         world = build_swarm_world()

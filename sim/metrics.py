@@ -38,6 +38,46 @@ The robot passed to :meth:`RunLog.log_tick` is duck-typed: it must expose
 ``pos`` (``(row, col)``), ``state`` (``str``-able), and ``carrying``
 (``bool``). Attribute errors propagate on purpose — a robot that doesn't
 meet the contract should fail loudly, not log garbage.
+
+Optional structure samples (v0.2 milestone 2)
+----------------------------------------------
+Off unless the :class:`RunLog` is constructed with a :class:`StructureLog`.
+The version number does not change, and frames without a sample have no
+``structure`` key, so logs written before this field (and runs that never
+opt in) stay byte-for-byte the same shape.
+
+``meta.structure`` describes the model that produced the samples::
+
+    {
+      "k": float, "k_axial": float, "k_shear": float,
+      "mass": float, "g": float, "pitch": float, "every": int, "si": bool,
+      "displacement_units": "mg/k" | "m",
+      "strain_units": "1",
+      "up_axis": int, "up_sign": int,
+      "note": str
+    }
+
+A tick that was actually sampled (an occupancy change whose index is a
+multiple of ``every``) gains::
+
+    "structure": {
+      "worst_displacement": float,
+      "worst_cell": [int, ...] | null,
+      "worst_sag": float,
+      "worst_sag_cell": [int, ...] | null,
+      "n_fixed": int, "n_free": int,
+      "displacements": [{"cell": [int, ...], "u": [float, ...]}, ...],
+      "joints": [
+        {"a": [int, ...], "b": [int, ...], "axis": int,
+         "axial": float, "shear": float}, ...
+      ]
+    }
+
+``u`` is the displacement vector in coordinate order. ``axial`` /
+``shear`` are the strain proxy (relative displacement / ``pitch``),
+axial positive in tension. A singular spring network is recorded as
+``{"error": str}`` instead of aborting the run. These numbers are the
+linear-elastic estimate, not a measurement.
 """
 
 from __future__ import annotations
@@ -47,11 +87,100 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .stability import (
+    StabilityPolicy,
+    _stiffnesses,
+    estimate_sag,
+    joint_strains,
+    occupied_voxels,
+)
 from .world import DEFECT, EMPTY, GROUND, VOXEL, World
 
 RUN_LOG_VERSION = 2  # v2 adds "robots": [snapshot, ...]; "robot" kept for v1 readers
 RUN_LOG_VERSION_3D = 3  # v3 = v2 with 3D nodes: meta gains "levels",
 # nodes are [level, row, col], occupancy is levels x rows x cols
+
+
+def _cell_list(cell) -> list[int] | None:
+    if cell is None:
+        return None
+    return [int(x) for x in cell]
+
+
+@dataclass(frozen=True)
+class StructureLog:
+    """Opt-in sag and joint-strain samples for a :class:`RunLog`.
+
+    Nothing structural is written unless a run log is constructed with
+    one of these. ``policy`` is the same frame the stability gate uses.
+    ``k`` fills in whichever of ``k_axial`` and ``k_shear`` is omitted,
+    matching :func:`sim.stability.estimate_sag`.
+
+    The solve runs when the set of occupied voxels changes (a placement
+    or a removal), not on every tick, and only every ``every`` such
+    changes. The first logged occupancy is the baseline, not a sample.
+    A dense factorization of a ~100-voxel partial build is a few
+    milliseconds, so ``every=1`` is the right default at that size;
+    raise ``every`` when a run only needs the trend.
+
+    Displacements are in units of ``mass * g / k`` with the defaults.
+    Pass ``si=True`` when ``mass``, ``g``, the stiffnesses, and ``pitch``
+    are SI (kg, m/s², N/m, m); the log then labels displacement in
+    meters. The strain proxy is always dimensionless.
+    """
+
+    policy: StabilityPolicy
+    k: float = 1.0
+    k_axial: float | None = None
+    k_shear: float | None = None
+    mass: float = 1.0
+    g: float = 1.0
+    pitch: float = 1.0
+    every: int = 1
+    si: bool = False
+
+    def __post_init__(self) -> None:
+        if int(self.every) < 1:
+            raise ValueError("every must be >= 1")
+        if self.pitch <= 0:
+            raise ValueError("pitch must be positive")
+        # Reject a bad stiffness at construction, not halfway through a run.
+        _stiffnesses(self.k, self.k_axial, self.k_shear)
+        object.__setattr__(self, "every", int(self.every))
+
+    @property
+    def displacement_units(self) -> str:
+        return "m" if self.si else "mg/k"
+
+    def meta_block(self) -> dict[str, Any]:
+        axial, shear = _stiffnesses(self.k, self.k_axial, self.k_shear)
+        if self.si:
+            note = (
+                "Linear-elastic spring-network estimate in SI "
+                "(displacement in meters). Stiffness has not been fit to "
+                "printed specimens; this is not a measured strain."
+            )
+        else:
+            note = (
+                "Linear-elastic spring-network estimate. Stiffness has not "
+                "been fit to printed specimens. Displacement is in model "
+                "units of mass*g/k, not a measured sag."
+            )
+        return {
+            "k": float(self.k),
+            "k_axial": axial,
+            "k_shear": shear,
+            "mass": float(self.mass),
+            "g": float(self.g),
+            "pitch": float(self.pitch),
+            "every": int(self.every),
+            "si": bool(self.si),
+            "displacement_units": self.displacement_units,
+            "strain_units": "1",
+            "up_axis": int(self.policy.up_axis),
+            "up_sign": int(self.policy.up_sign),
+            "note": note,
+        }
 
 
 @dataclass
@@ -91,6 +220,15 @@ class RunLog:
     frames: list[dict[str, Any]] = field(default_factory=list)
     blueprint: list[list[int]] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
+    structure: StructureLog | None = None
+
+    def __post_init__(self) -> None:
+        # First logged occupancy is the baseline. Only a later change
+        # (placement or removal) can produce a sample.
+        self._structure_seen: tuple | None = None
+        self._structure_changes = 0
+        if self.structure is not None:
+            self.meta["structure"] = self.structure.meta_block()
 
     def log_tick(
         self,
@@ -128,16 +266,67 @@ class RunLog:
         self.records.append(rec)
         crew = robots if robots is not None else ([robot] if robot else [])
         snapshots = [_robot_snapshot(r) for r in crew]
-        self.frames.append(
-            {
-                "tick": tick,
-                "occupancy": world.occupancy.tolist(),
-                "placed": rec.placed,
-                "robot": snapshots[0] if snapshots else None,  # v1 compat
-                "robots": snapshots,
-            }
-        )
+        frame: dict[str, Any] = {
+            "tick": tick,
+            "occupancy": world.occupancy.tolist(),
+            "placed": rec.placed,
+            "robot": snapshots[0] if snapshots else None,  # v1 compat
+            "robots": snapshots,
+        }
+        sample = self._sample_structure(world)
+        if sample is not None:
+            frame["structure"] = sample
+        self.frames.append(frame)
         return rec
+
+    def _sample_structure(self, world: World) -> dict[str, Any] | None:
+        spec = self.structure
+        if spec is None:
+            return None
+        cells = occupied_voxels(world)
+        if self._structure_seen is None:
+            self._structure_seen = cells
+            return None
+        if cells == self._structure_seen:
+            return None
+        self._structure_seen = cells
+        self._structure_changes += 1
+        if self._structure_changes % spec.every != 0:
+            return None
+        try:
+            estimate = estimate_sag(
+                cells,
+                spec.policy,
+                k=spec.k,
+                k_axial=spec.k_axial,
+                k_shear=spec.k_shear,
+                mass=spec.mass,
+                g=spec.g,
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {
+            "worst_displacement": estimate.worst_displacement,
+            "worst_cell": _cell_list(estimate.worst_cell),
+            "worst_sag": estimate.worst_sag,
+            "worst_sag_cell": _cell_list(estimate.worst_sag_cell),
+            "n_fixed": estimate.n_fixed,
+            "n_free": estimate.n_free,
+            "displacements": [
+                {"cell": _cell_list(cell), "u": [float(v) for v in vec]}
+                for cell, vec in sorted(estimate.displacements.items())
+            ],
+            "joints": [
+                {
+                    "a": _cell_list(joint.a),
+                    "b": _cell_list(joint.b),
+                    "axis": joint.axis,
+                    "axial": joint.axial,
+                    "shear": joint.shear,
+                }
+                for joint in joint_strains(estimate, pitch=spec.pitch)
+            ],
+        }
 
     # -- export --------------------------------------------------------------
 

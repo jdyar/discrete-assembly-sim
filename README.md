@@ -38,6 +38,7 @@ python examples/hex_lattice.py   # bring-your-own-LATTICE tutorial (see below)
 python examples/my_robot.py      # bring-your-own-ROBOT tutorial
 
 python main.py swarm3d 2      # 2 robots build a 3D hollow box -> runs/latest.json
+python main.py bridge         # stability gate on, strain log -> runs/bridge.json
 python main.py speedup3d      # speedup-vs-N (1..5) experiment -> runs/speedup_3d.png
 python main.py reach3d        # build ticks vs reach radius -> runs/ticks_vs_reach.png
 python main.py yield3d        # swarm-scale yield vs p vs N -> runs/yield3d.png
@@ -46,10 +47,14 @@ python main.py swarm 2        # 2 robots, 2D wall (the degenerate case, kept hon
 python main.py                # single robot, defects + repair (the yield demo)
 python main.py yield          # the yield-vs-p experiment -> runs/yield_vs_p.png
 
-python -m unittest            # 124 tests: traps, 3D repair, fuzz, examples, stability
+python -m unittest            # 135 tests: traps, 3D repair, fuzz, examples, stability, strain log
 ```
 
-**Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run.
+**Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run. A log written with strain sampling (`python main.py bridge` → `runs/bridge.json`) adds a color mode for displacement or joint strain, a colorbar, a scale slider, and a marker on the worst-sag voxel. Logs without that data play exactly as before.
+
+![Two-pier bridge colored by the spring-network displacement estimate. White cage: worst-sag cell. Scale 0.15×, because unfitted k = 1 sags several voxel-lengths; the colorbar is model units of mg/k, not a measurement on a printed part.](docs/strain_bridge.png)
+
+The figure is that bridge demo: the stability gate is on (`max_cantilever` 3), one robot, stiffness left at the unfitted default `k = 1`. Finished midspan sag is 8 in units of `mass·g/k`. The slider's 1× draws that model displacement in voxel lengths; above 1× exaggerates the shape, and the picture above is at 0.15× so the deck stays readable. Joint-strain mode colors each voxel by its largest incident face joint (axial, positive in tension, or shear). Stiffness has not been fit to a 3D-printed specimen. The same coloring over the build: ![Bridge build colored by the displacement estimate](docs/strain_bridge.gif)
 
 ## Why 3D is the game
 
@@ -111,12 +116,12 @@ sim/
   robot.py              # single-robot state machine (the Slice 1-2 build)
   metrics.py            # replayable JSON run logs (v1/v2/v3) + charts
   render.py             # ASCII + matplotlib animation
-tests/                  # 124 tests incl. spec-first adversarial trap fixtures
+tests/                  # 135 tests incl. spec-first adversarial trap fixtures
 replay_viewer.html      # zero-build Three.js replay viewer (2D + 3D)
 docs/DESIGN.md          # binding architecture rules + provenance per stage
 ```
 
-The multi-robot core, in one paragraph: an idle robot claims the nearest task from the **sequencer**'s validated build order, and the **choreographer** plans its whole task (to depot → pick → to stance → place → inspect) as a shortest path through a **time-expanded graph** — space × time, where waiting is a move — against everyone's existing reservations. Before committing, two gates run: the placement must not disconnect any robot's future from the depot (**connectivity gate**, proven on the world-plus-all-deeds graph), and must leave the rest of the blueprint completable (**buildability gate**). An optional third gate, **structural stability**, stays off unless you pass a `StabilityPolicy`: every voxel must face-connect to a column on the base, and nothing may stick out past a cantilever limit. A refusal from any gate is a **kickback**: the task returns for reordering and the world moves on — never a deadlock, never a frozen swarm. A defect found at inspect triggers remove + re-sequence *through* live traffic. Full rules and provenance: [docs/DESIGN.md](docs/DESIGN.md).
+The multi-robot core, in one paragraph: an idle robot claims the nearest task from the **sequencer**'s validated build order, and the **choreographer** plans its whole task (to depot → pick → to stance → place → inspect) as a shortest path through a **time-expanded graph** — space × time, where waiting is a move — against everyone's existing reservations. Before committing, two gates run: the placement must not disconnect any robot's future from the depot (**connectivity gate**, proven on the world-plus-all-deeds graph), and must leave the rest of the blueprint completable (**buildability gate**). An optional third gate, **structural stability**, stays off unless you pass a `StabilityPolicy`: every voxel must face-connect to a column on the base, and nothing may stick out past a cantilever limit. The same opt-in can record the spring-network sag after each placement (`StructureLog` on a `RunLog`): per-voxel displacement and a per-joint strain proxy, split into axial and shear. Sampling follows occupancy changes, every `every` changes (default 1), which is cheap out to about a hundred voxels. The viewer colors by those samples. The colors are the model estimate — stiffness has not been fit to 3D-printed specimens, and the default colorbar is in units of `mass·g/k` unless you pass `si=True` with SI inputs. A refusal from any gate is a **kickback**: the task returns for reordering and the world moves on — never a deadlock, never a frozen swarm. A defect found at inspect triggers remove + re-sequence *through* live traffic. Full rules and provenance: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Background & references
 
@@ -142,6 +147,7 @@ Built in vertical slices — every milestone is a running end-to-end program wit
 - ✅ Motion-model remainder: multi-cell stride (reservation-sound swept cells), climb limit, coupled-robot pairs
 - ✅ Yield-vs-p at N in 3D (corrected 100% everywhere; uncorrected swarms jam, not decay); congestion knee vs structure size (×4.07 at N=5 on 96 voxels)
 - ✅ Structural checks, milestone 1 (optional, off by default): grounded connectivity, a cantilever limit, and a linear-elastic sag estimate. Still open: load cases beyond self-weight, a displacement limit inside the gate, cuboct joint mechanics
+- ✅ Strain visualization, milestone 2 (optional, off by default): per-placement displacement and joint-strain samples in the run log, and a viewer that colors, exaggerates, and marks the worst-sag cell. The picture is the uncalibrated spring model, not a measurement on a printed part
 - ⏳ Dynamic robot coupling (mid-run rendezvous/attach/detach)
 - ⏳ Typed part families
 - ⏳ Hierarchical sequencing for 10³+-voxel blueprints
