@@ -70,8 +70,9 @@ The sag estimate is not a gate. It is a dense `Ku = mg` solve (voxels
 as nodes, face joints as axial and shear springs) that reports the
 worst displacement of a partial build. It is not run inside the search.
 Default-off is load-bearing: `max_cantilever=0` rejects spans, including
-a hollow-box roof, and the published experiments were not run with the
-gate on.
+a hollow-box roof. §6.1–§6.5 of the whitepaper were not run with the
+gate on. §6.6 is the measurement (`python main.py stability`), and the
+stiffness in that run is the unfitted default k = 1.
 
 The same estimate can be written into the run log. A `StructureLog`
 attached to a `RunLog` is off by default; without it, frames are

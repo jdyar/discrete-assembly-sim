@@ -10,6 +10,8 @@ log goes to runs/latest.json for the replay viewer.
     python main.py slice1     # clean build, no defects, + ticks chart
     python main.py slice0     # the old ugly loop (no robot)
     python main.py bridge     # stability gate on, strain log -> runs/bridge.json
+    python main.py stability # gate cost/effect campaign -> docs/stability_cost.*
+    python main.py stability smoke
 """
 
 from __future__ import annotations
@@ -545,6 +547,11 @@ def main() -> None:
         return
     elif mode == "bridge":
         log, _swarm = run_bridge()
+    elif mode == "stability":
+        from experiments.stability_cost import main as stability_main
+
+        stability_main(sys.argv[2:])
+        return
     elif mode == "swarm":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 2
         world = build_swarm_world()

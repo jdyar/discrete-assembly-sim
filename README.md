@@ -39,6 +39,7 @@ python examples/my_robot.py      # bring-your-own-ROBOT tutorial
 
 python main.py swarm3d 2      # 2 robots build a 3D hollow box -> runs/latest.json
 python main.py bridge         # stability gate on, strain log -> runs/bridge.json
+python main.py stability     # gate cost and effect -> docs/stability_cost.csv
 python main.py speedup3d      # speedup-vs-N (1..5) experiment -> runs/speedup_3d.png
 python main.py reach3d        # build ticks vs reach radius -> runs/ticks_vs_reach.png
 python main.py yield3d        # swarm-scale yield vs p vs N -> runs/yield3d.png
@@ -47,7 +48,7 @@ python main.py swarm 2        # 2 robots, 2D wall (the degenerate case, kept hon
 python main.py                # single robot, defects + repair (the yield demo)
 python main.py yield          # the yield-vs-p experiment -> runs/yield_vs_p.png
 
-python -m unittest            # 135 tests: traps, 3D repair, fuzz, examples, stability, strain log
+python -m unittest            # 142 tests: traps, 3D repair, fuzz, examples, stability, strain log
 ```
 
 **Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run. A log written with strain sampling (`python main.py bridge` → `runs/bridge.json`) adds a color mode for displacement or joint strain, a colorbar, a scale slider, and a marker on the worst-sag voxel. Logs without that data play exactly as before.
@@ -81,6 +82,20 @@ At **swarm scale** the stakes turn out to be higher than the single-robot chart 
 ![Yield vs defect rate at swarm scale: corrected 100% at N=1..3; uncorrected collapses to ~15% at p=0.08](docs/yield3d.png)
 
 Reproduce with `python main.py yield3d`. The repair experiment also caught a genuine concurrency bug — a repair replan racing another robot's still-standing defect — now fixed with a regression test pinning the exact interleaving (`tests/test_swarm3d.py`).
+
+## Structural gate results
+
+The stability gate is off unless you pass a `StabilityPolicy`. `python main.py stability` is the measurement of turning it on: 312 trials, gate off against `max_cantilever` 0, 1, 2, 3, and none. Stiffness is the default **k = 1**. Every sag number below is `estimate_sag` in model units of `mass·g/k`. It has not been fit to a printed specimen; that calibration is still waiting on specimen tests.
+
+Named cells are 3 start seeds (0, 1, 2) × 1 and 2 robots, so n = 6. A search that hits the 200-node cap is undecided, not a rejection. Points on the charts are trials; the bar is the median. The full spread, including idle robot-ticks and planning seconds, is in [WHITEPAPER.md](WHITEPAPER.md) §6.6 and `docs/stability_cost.csv`.
+
+![Peak sag during construction. The span-5 bridge drops from a median of 15 to 6 at cantilever limit 2, which is the finished sag. k = 1, uncalibrated.](docs/stability_peak_sag.png)
+
+On the span-5 bridge the finished sag is 6. With the gate off, the peak during the build is 15 on four of the six trials and 10 on two. Limit 2 is the tightest setting that still accepts the deck, and all six trials then peak at 6. Limit 3 leaves a peak of 10. Limits 0 and 1 are proved infeasible, 6/6. The span-6 bridge repeats it one step looser: gate-off peak median 21 (range 15–21), limit 3 peaks at 10 on all six, finished sag 8, and limits 0–2 are proved infeasible. A pure cantilever keeps the peak it had with the gate off, once the limit allows the arm: length 3 stays at 10, length 4 stays at 15, and length 4 is rejected at every finite limit. Every gate-off length-4 trial logged 5 singular sag samples; with the connectivity rule on, that count is 0. The wall peaks at 3 in every trial. The hollow 3×3×2 roof fails as a finished structure at limit 0, and the order search is undecided on all 6 trials inside 200 nodes (median 7.12 s, range 7.09–7.15). At limits that allow the roof, peak sag matches the gate-off runs.
+
+![Ticks to complete. One robot is the light series, two robots the dark series.](docs/stability_makespan.png)
+
+The search that finds a legal order stays at about 0.03 s. The cost is the build. Span-5 at limit 2: one robot goes from 78–85 ticks and 0 kickbacks to 104–135 ticks and 3–6 kickbacks; two robots go from 50–56 ticks and 0 kickbacks to 69–112 ticks, 4–26 kickbacks, and 24–80 idle robot-ticks. Four fuzz shapes (a small wall, a span-6 bridge, a length-3 cantilever, a ledge; seeds 1001–1004, n = 4) repeat the same split. Reproduce with `python main.py stability`.
 
 ## Plug in your robot
 
@@ -116,7 +131,7 @@ sim/
   robot.py              # single-robot state machine (the Slice 1-2 build)
   metrics.py            # replayable JSON run logs (v1/v2/v3) + charts
   render.py             # ASCII + matplotlib animation
-tests/                  # 135 tests incl. spec-first adversarial trap fixtures
+tests/                  # 142 tests incl. spec-first adversarial trap fixtures
 replay_viewer.html      # zero-build Three.js replay viewer (2D + 3D)
 docs/DESIGN.md          # binding architecture rules + provenance per stage
 ```
@@ -146,7 +161,7 @@ Built in vertical slices — every milestone is a running end-to-end program wit
 - ✅ Snake-arm reach as config (radii 1–4 through the unchanged planner; ×1.75 at reach 4)
 - ✅ Motion-model remainder: multi-cell stride (reservation-sound swept cells), climb limit, coupled-robot pairs
 - ✅ Yield-vs-p at N in 3D (corrected 100% everywhere; uncorrected swarms jam, not decay); congestion knee vs structure size (×4.07 at N=5 on 96 voxels)
-- ✅ Structural checks, milestone 1 (optional, off by default): grounded connectivity, a cantilever limit, and a linear-elastic sag estimate. Still open: load cases beyond self-weight, a displacement limit inside the gate, cuboct joint mechanics
+- ✅ Structural checks, off by default: grounded connectivity, a cantilever limit, and a linear-elastic sag estimate. Milestone 3 (`python main.py stability`) measures the gate: on a span-5 bridge, limit 2 cuts peak intermediate sag from a median of 15 (range 10–15) to 6, and pays in makespan and kickbacks. Stiffness is still uncalibrated (k = 1). Still open: load cases beyond self-weight, a displacement limit inside the gate, cuboct joint mechanics
 - ✅ Strain visualization, milestone 2 (optional, off by default): per-placement displacement and joint-strain samples in the run log, and a viewer that colors, exaggerates, and marks the worst-sag cell. The picture is the uncalibrated spring model, not a measurement on a printed part
 - ⏳ Dynamic robot coupling (mid-run rendezvous/attach/detach)
 - ⏳ Typed part families
