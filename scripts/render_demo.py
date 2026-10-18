@@ -1,0 +1,425 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 Joshua Dyar. MIT License (see LICENSE).
+"""Headless ~60 s capture of the replay viewer.
+
+Two clips, with title cards:
+
+1. Two robots building the two-pier bridge. Voxels are colored by the
+   spring-network displacement. The scale slider is above the 0.15× used
+   in the README still, so the sag reads on a recording. k = 1. The
+   number on the title card is read from the log this script just wrote.
+2. The 2×2×2 cuboct block (``python main.py cuboct``'s world). Display
+   solid only. No stiffness.
+
+Requires the repo dependencies (numpy), plus Playwright, ffmpeg, and
+Google Chrome. Three.js is loaded from the CDN the viewer already uses,
+so the capture needs network on first load.
+
+    pip install playwright
+    python scripts/render_demo.py
+    python scripts/render_demo.py --mp4 /opt/cursor/artifacts/v02_demo.mp4 \\
+        --gif docs/demo_bridge.gif
+
+The mp4 is a generated artifact. A GIF is written only when the compressed
+file is at or under ``--gif-max-bytes`` (default 1.5 MB). Logs go to
+``runs/``, which is gitignored.
+
+This is a picture of the model. It is not a measurement on a printed part.
+"""
+
+from __future__ import annotations
+
+import argparse
+import http.server
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# Display multiplier on model displacement (voxel lengths per mg/k at
+# pitch 1). The README still uses 0.15× so the deck stays a deck.
+# 0.50× on this bridge (finished sag 8 mg/k) draws the midspan 4
+# voxel-lengths down, which is the exaggeration the recording is for.
+# The camera for that clip is a side view; a top-down orbit hides it.
+DEFORM = 0.50
+FPS = 10
+WIDTH = 1280
+HEIGHT = 720
+# 4s + 36s + 4s + 12s + 4s = 60s at FPS.
+TITLE_S = 4.0
+BRIDGE_S = 36.0
+CUBOCT_TITLE_S = 4.0
+CUBOCT_S = 12.0
+END_S = 4.0
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _serve(port: int) -> http.server.ThreadingHTTPServer:
+    handler = lambda *args, **kwargs: http.server.SimpleHTTPRequestHandler(  # noqa: E731
+        *args, directory=str(ROOT), **kwargs
+    )
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd
+
+
+def _build_logs() -> dict:
+    """Write the two logs the recording plays. Return sag facts for the titles."""
+    from main import (
+        BRIDGE_CANTILEVER,
+        BRIDGE_DEPOT,
+        build_bridge_world,
+        run_cuboct,
+        run_swarm3d_build,
+    )
+    from sim.cuboct import VOXEL_SHAPE_CUBOCTAHEDRAL
+    from sim.geometry3d import CubicLattice3D
+    from sim.metrics import StructureLog
+
+    runs = ROOT / "runs"
+    runs.mkdir(exist_ok=True)
+
+    world = build_bridge_world()
+    policy = CubicLattice3D(world).stability_policy(BRIDGE_CANTILEVER)
+    structure = StructureLog(policy, k=1.0, mass=1.0, g=1.0, pitch=1.0, every=1)
+    # Second start is another ground-level footing, opposite the first,
+    # not on the depot and not on a pier cell.
+    log, swarm = run_swarm3d_build(
+        world,
+        n_robots=2,
+        depot=BRIDGE_DEPOT,
+        starts=[(1, 5, 12), (1, 1, 12)],
+        stability=policy,
+        structure=structure,
+        verbose=False,
+        max_ticks=8000,
+    )
+    if not world.complete:
+        raise RuntimeError(
+            f"two-robot bridge did not finish: {world.built_count}/{world.blueprint_count} "
+            f"ticks={swarm.tick_count} kickbacks={swarm.kickbacks}"
+        )
+    bridge_path = runs / "demo_bridge.json"
+    log.save(bridge_path)
+    samples = [
+        f["structure"]
+        for f in log.frames
+        if "structure" in f and "error" not in f["structure"]
+    ]
+    if not samples:
+        raise RuntimeError("bridge log has no structural samples")
+    peaks = [float(s["worst_sag"]) for s in samples]
+    final = samples[-1]
+
+    cuboct_log, cuboct_swarm = run_cuboct(verbose=False)
+    if cuboct_log.meta.get("voxel_shape") != VOXEL_SHAPE_CUBOCTAHEDRAL:
+        raise RuntimeError("cuboct log did not record voxel_shape")
+    cuboct_path = runs / "demo_cuboct.json"
+    cuboct_log.save(cuboct_path)
+    return {
+        "bridge_frames": len(log.frames),
+        "bridge_ticks": swarm.tick_count,
+        "bridge_kickbacks": swarm.kickbacks,
+        "final_sag": float(final["worst_sag"]),
+        "final_cell": final.get("worst_sag_cell"),
+        "peak_sag": max(peaks),
+        "cuboct_frames": len(cuboct_log.frames),
+        "cuboct_ticks": cuboct_swarm.tick_count,
+        "deform": DEFORM,
+    }
+
+
+def _card(title: str, lines: list[str]) -> str:
+    body = "".join(f"<p>{line}</p>" for line in lines)
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<style>
+  html, body {{ margin: 0; height: 100%; background: #0b1020; color: #e2e8f0;
+    font: 28px/1.45 "Segoe UI", Helvetica, Arial, sans-serif; }}
+  main {{ box-sizing: border-box; height: 100%; padding: 88px 96px; }}
+  h1 {{ font-size: 54px; font-weight: 650; margin: 0 0 28px; letter-spacing: -0.02em; }}
+  p {{ margin: 0 0 14px; max-width: 980px; color: #cbd5e1; }}
+  p.strong {{ color: #f8fafc; }}
+</style></head>
+<body><main><h1>{title}</h1>{body}</main></body></html>"""
+
+
+def _shot_cards(page, directory: Path, prefix: str, html: str, n: int) -> None:
+    page.set_content(html, wait_until="load")
+    page.screenshot(path=str(directory / f"{prefix}0000.png"))
+    src = directory / f"{prefix}0000.png"
+    for i in range(1, n):
+        dest = directory / f"{prefix}{i:04d}.png"
+        if not dest.exists():
+            dest.write_bytes(src.read_bytes())
+
+
+def _drive(page, url: str, n_video: int, n_sim: int, prefix: str, directory: Path,
+           color: str | None, deform: float | None, *,
+           cover: bool, phi: float, radius: float, theta0: float, theta1: float) -> None:
+    page.goto(url, wait_until="domcontentloaded")
+    page.wait_for_function(
+        "() => window.assemblerReplay && window.assemblerReplay.ready() "
+        "&& window.assemblerReplay.nFrames() > 0",
+        timeout=45_000,
+    )
+    page.evaluate("() => window.assemblerReplay.setPlaying(false)")
+    for i in range(n_video):
+        if cover:
+            # Last video frame of this segment is the last sim frame.
+            sim = round(i / max(1, n_video - 1) * (n_sim - 1))
+        else:
+            # Finish the build with 10% of the clip left, then hold.
+            sim = min(n_sim - 1, int(i / (0.9 * n_video) * n_sim))
+        t = i / max(1, n_video - 1)
+        theta = theta0 + (theta1 - theta0) * t
+        page.evaluate(
+            """async ({sim, color, deform, theta, phi, radius}) => {
+                const v = window.assemblerReplay;
+                if (color) v.setColor(color);
+                if (deform != null) v.setDeform(deform);
+                v.setOrbit(theta, phi, radius);
+                v.setFrame(sim);
+                await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            }""",
+            {
+                "sim": sim,
+                "color": color,
+                "deform": deform,
+                "theta": theta,
+                "phi": phi,
+                "radius": radius,
+            },
+        )
+        page.screenshot(path=str(directory / f"{prefix}{i:04d}.png"))
+
+
+def _ffmpeg(args: list[str]) -> None:
+    proc = subprocess.run(args, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "ffmpeg failed\n" + proc.stdout[-2000:] + "\n" + proc.stderr[-2000:]
+        )
+
+
+def _encode(directory: Path, mp4: Path, gif: Path | None, gif_max: int) -> str:
+    mp4.parent.mkdir(parents=True, exist_ok=True)
+    sequence = directory / "all_%04d.png"
+    # Pieces were written as separate prefixes. Concatenate in story order.
+    pieces = []
+    for prefix in ("t1_", "br_", "t2_", "cu_", "t3_"):
+        pieces.extend(sorted(directory.glob(f"{prefix}*.png")))
+    if not pieces:
+        raise RuntimeError("no frames captured")
+    for i, src in enumerate(pieces):
+        dest = directory / f"all_{i:04d}.png"
+        if dest.resolve() != src.resolve():
+            dest.write_bytes(src.read_bytes())
+    _ffmpeg(
+        [
+            "ffmpeg", "-y", "-framerate", str(FPS),
+            "-i", str(directory / "all_%04d.png"),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            str(mp4),
+        ]
+    )
+    note = f"mp4 {mp4} ({mp4.stat().st_size} bytes, {len(pieces) / FPS:.1f} s)"
+    if gif is None:
+        return note
+    # A short excerpt of the bridge once the deck is colored, not the whole minute.
+    gif.parent.mkdir(parents=True, exist_ok=True)
+    palette = directory / "palette.png"
+    clip_start = TITLE_S + 22.0  # into the bridge, sag is on screen
+    _ffmpeg(
+        [
+            "ffmpeg", "-y", "-ss", f"{clip_start:.2f}", "-t", "5",
+            "-i", str(mp4),
+            "-vf", "fps=8,scale=560:-1:flags=lanczos,palettegen=stats_mode=diff",
+            str(palette),
+        ]
+    )
+    _ffmpeg(
+        [
+            "ffmpeg", "-y", "-ss", f"{clip_start:.2f}", "-t", "5",
+            "-i", str(mp4), "-i", str(palette),
+            "-lavfi", "fps=8,scale=560:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer",
+            str(gif),
+        ]
+    )
+    size = gif.stat().st_size
+    if size > gif_max:
+        gif.unlink()
+        return note + f"; gif {size} bytes exceeded {gif_max}, not kept"
+    return note + f"; gif {gif} ({size} bytes)"
+
+
+def render(mp4: Path, gif: Path | None, gif_max: int) -> str:
+    if shutil.which("ffmpeg") is None:
+        raise SystemExit("ffmpeg is not on PATH")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise SystemExit(
+            "playwright is not installed. pip install playwright  "
+            "(Chrome is launched via channel='chrome'; chromium is not downloaded.)"
+        ) from exc
+
+    facts = _build_logs()
+    port = _free_port()
+    httpd = _serve(port)
+    frames = mp4.parent / "_demo_frames" if False else Path("/tmp/assembler-demo-frames")
+    if frames.exists():
+        shutil.rmtree(frames)
+    frames.mkdir(parents=True)
+    base = f"http://127.0.0.1:{port}/replay_viewer.html"
+    n_title = int(TITLE_S * FPS)
+    n_bridge = int(BRIDGE_S * FPS)
+    n_c2 = int(CUBOCT_TITLE_S * FPS)
+    n_cuboct = int(CUBOCT_S * FPS)
+    n_end = int(END_S * FPS)
+    sag = facts["final_sag"]
+    peak = facts["peak_sag"]
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                channel="chrome",
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            page = browser.new_page(viewport={"width": WIDTH, "height": HEIGHT})
+            _shot_cards(
+                page, frames, "t1_",
+                _card(
+                    "discrete-assembly-sim",
+                    [
+                        "<span class='strong'>Two robots build a span.</span> Color is the spring-network displacement.",
+                        f"This run: peak sag {peak:.0f} mg/k, finished {sag:.0f} mg/k at k = 1 (unfitted).",
+                        f"Display scale {DEFORM:.2f}× — exaggerated so the sag reads. Not a measured deflection.",
+                    ],
+                ),
+                n_title,
+            )
+            # Shear on the last 4 seconds of the bridge clip, displacement before that.
+            # Driven inside _drive via a single color; we split the call.
+            shear_at = n_bridge - int(4 * FPS)
+            page.goto("about:blank")
+            _drive(
+                page,
+                f"{base}?log=runs/demo_bridge.json&frame=0&color=displacement&deform={DEFORM}&theta=0.45",
+                shear_at,
+                facts["bridge_frames"],
+                "br_",
+                frames,
+                color="displacement",
+                deform=DEFORM,
+                cover=True,
+                phi=1.35,
+                radius=11,
+                theta0=0.05,
+                theta1=0.55,
+            )
+            # Continue the frame index. _drive always starts at 0, so write the
+            # shear hold into the same prefix with an offset by a second pass
+            # that names files from shear_at.
+            page.evaluate("() => window.assemblerReplay.setColor('shear')")
+            for i in range(shear_at, n_bridge):
+                sim = facts["bridge_frames"] - 1
+                t = i / max(1, n_bridge - 1)
+                theta = 0.05 + 0.50 * t
+                page.evaluate(
+                    """async ({sim, theta, deform}) => {
+                        const v = window.assemblerReplay;
+                        v.setDeform(deform);
+                        v.setOrbit(theta, 1.35, 11);
+                        v.setFrame(sim);
+                        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    }""",
+                    {"sim": sim, "theta": theta, "deform": DEFORM},
+                )
+                page.screenshot(path=str(frames / f"br_{i:04d}.png"))
+            _shot_cards(
+                page, frames, "t2_",
+                _card(
+                    "Cuboctahedral voxels",
+                    [
+                        "Same six face-neighbors as the cube. The viewer draws the solid the log names.",
+                        "Joint sites are the corners of each square face. The sag solver still uses one spring at the face center.",
+                        "Not a stiffness measurement of ARMADAS hardware.",
+                    ],
+                ),
+                n_c2,
+            )
+            _drive(
+                page,
+                f"{base}?log=runs/demo_cuboct.json&frame=0&shape=cuboctahedral&theta=0.5",
+                n_cuboct,
+                facts["cuboct_frames"],
+                "cu_",
+                frames,
+                color=None,
+                deform=None,
+                cover=False,
+                phi=1.05,
+                radius=8,
+                theta0=0.4,
+                theta1=1.8,
+            )
+            _shot_cards(
+                page, frames, "t3_",
+                _card(
+                    "Not a measurement",
+                    [
+                        "Stiffness is the default k = 1. Colors are model units of mg/k.",
+                        "The print check (PLA cantilevers, n = 3 and n = 6) is docs/VALIDATION.md. The table is empty.",
+                        "v0.2.0 stays untagged until that calibration.",
+                    ],
+                ),
+                n_end,
+            )
+            browser.close()
+    finally:
+        httpd.shutdown()
+    return _encode(frames, mp4, gif, gif_max) + (
+        f"; bridge ticks={facts['bridge_ticks']} kickbacks={facts['bridge_kickbacks']} "
+        f"peak={peak:.4f} final={sag:.4f} at {facts['final_cell']}; "
+        f"cuboct ticks={facts['cuboct_ticks']}"
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mp4",
+        type=Path,
+        default=Path("/opt/cursor/artifacts/v02_demo.mp4"),
+    )
+    parser.add_argument(
+        "--gif",
+        type=Path,
+        default=ROOT / "docs" / "demo_bridge.gif",
+        help="Compressed excerpt. Omitted from disk if larger than --gif-max-bytes. Pass '' to skip.",
+    )
+    parser.add_argument("--gif-max-bytes", type=int, default=1_500_000)
+    args = parser.parse_args()
+    gif = args.gif if str(args.gif) else None
+    started = time.time()
+    print(render(args.mp4, gif, args.gif_max_bytes))
+    print(f"elapsed {time.time() - started:.1f} s")
+
+
+if __name__ == "__main__":
+    main()
