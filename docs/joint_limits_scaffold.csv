@@ -1,0 +1,5 @@
+span,gait,finished_shear_mg,onesided_shear_mg,shear_gap_mg,finished_compression_mg,sag_only_count,sag_only_status,joint_at_finished_count,joint_at_finished_status,joint_midgap_count,joint_midgap_status,joint_half_count,joint_half_status,k,mass,g
+4,crane,1.5,4,2.5,2.5,0,ok,0,ok,0,ok,,infeasible,1,1,1
+5,crane,2,5,3,3,0,ok,0,ok,0,ok,,infeasible,1,1,1
+6,crane,2.5,6,3.5,3.5,0,ok,0,ok,0,ok,,infeasible,1,1,1
+4,inchworm,1.5,4,2.5,2.5,3,ok,3,ok,3,ok,,infeasible,1,1,1

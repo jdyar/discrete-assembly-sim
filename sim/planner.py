@@ -45,11 +45,13 @@ from typing import Callable, NamedTuple
 
 from .geometry import Geometry, SquareLattice2D, bfs_path, bfs_reachable
 from .stability import (
+    JointCap,
     SagCap,
     StabilityPolicy,
     StabilityPrecheck,
     assess_stability,
     is_stable,
+    joints_within,
     necessary_stability_precheck,
     occupied_voxels,
     robot_stance_ok,
@@ -116,7 +118,15 @@ def stability_precheck(
     return necessary_stability_precheck(_finished_voxels(world), stability)
 
 
-def _robot_stance_ok(geometry: Geometry, approach, occupied, stability, *, carrying: bool) -> bool:
+def _robot_stance_ok(
+    geometry: Geometry,
+    approach,
+    occupied,
+    stability,
+    *,
+    carrying: bool,
+    joints: JointCap | None = None,
+) -> bool:
     """Foot-load check. No feet means the crane stance: always ok."""
     if stability is None:
         return True
@@ -128,6 +138,7 @@ def _robot_stance_ok(geometry: Geometry, approach, occupied, stability, *, carry
         feet,
         stability,
         carrying=carrying,
+        joints=joints,
         **geometry.sag_parameters(),
     )
     return ok
@@ -154,6 +165,7 @@ def plan_build_order(
     stability: StabilityPolicy | None = None,
     precheck: bool = True,
     sag: SagCap | None = None,
+    joints: JointCap | None = None,
 ) -> list[Task] | None:
     """Search for a complete, valid placement order for the blueprint.
 
@@ -190,6 +202,15 @@ def plan_build_order(
     Leave it ``None`` to skip the solve, including inside the
     buildability gate's re-search unless that caller passes a cap.
 
+    ``joints``, when given, is the same kind of prefix cap on face-joint
+    utilization (:func:`~sim.stability.joints_within`). A joint fails
+    when its demand exceeds ``capacity × safety_factor``. With the
+    default ``JointCap`` stiffness the demand is in units of
+    ``mass·g``, not newtons. The finished structure is screened before
+    the search, the same way the sag cap is: a blueprint that already
+    exceeds the strength is not given an order. ``joints`` requires
+    ``stability``. Leave it ``None`` and no joint force is computed.
+
     ``precheck=False`` skips only the finished-structure screen. The
     per-prefix gate inside the search stays. The unscreened search cannot
     accept a blueprint the screen rejects, because the finished prefix
@@ -199,6 +220,8 @@ def plan_build_order(
     """
     if sag is not None and stability is None:
         raise ValueError("a sag cap needs a StabilityPolicy for the frame")
+    if joints is not None and stability is None:
+        raise ValueError("a joint cap needs a StabilityPolicy for the frame")
     if world.defect_count:
         # Contract (Slice 2): the robot removes a defect before requesting a
         # replan, so the planner only ever sees clean worlds. A DEFECT cell
@@ -219,12 +242,17 @@ def plan_build_order(
             return None
         if sag is not None and not sag_within(_finished_voxels(world), stability, sag):
             return None
+        if joints is not None and not joints_within(
+            _finished_voxels(world), stability, joints
+        ):
+            return None
 
     geometry = geometry_factory(world)
     dead: set[frozenset[Cell]] = set()
     nodes = 0
     plan: list[Task] = []
     sag_cache: dict[frozenset[Cell], bool] = {}
+    joint_cache: dict[frozenset[Cell], bool] = {}
 
     def dfs(remaining: frozenset[Cell]) -> bool:
         nonlocal nodes
@@ -257,7 +285,12 @@ def plan_build_order(
             # The robot is still holding the block: check the structure
             # it is standing on, with the carried mass on its feet.
             if not _robot_stance_ok(
-                geometry, approach, occupied_voxels(world), stability, carrying=True
+                geometry,
+                approach,
+                occupied_voxels(world),
+                stability,
+                carrying=True,
+                joints=joints,
             ):
                 continue
             world.occupancy[target] = VOXEL
@@ -277,11 +310,26 @@ def plan_build_order(
                     rejected_unstable.add(target)
                     world.occupancy[target] = EMPTY
                     continue
+            if joints is not None:
+                placed = frozenset(occupied_voxels(world))
+                ok = joint_cache.get(placed)
+                if ok is None:
+                    ok = joints_within(placed, stability, joints)
+                    joint_cache[placed] = ok
+                if not ok:
+                    rejected_unstable.add(target)
+                    world.occupancy[target] = EMPTY
+                    continue
             # After the place the block's weight is self-weight, not a
             # payload. A stance that only fails this is not a reason to
             # retire the cell: another foot placement may be lighter.
             if not _robot_stance_ok(
-                geometry, approach, occupied_voxels(world), stability, carrying=False
+                geometry,
+                approach,
+                occupied_voxels(world),
+                stability,
+                carrying=False,
+                joints=joints,
             ):
                 world.occupancy[target] = EMPTY
                 continue
@@ -312,6 +360,7 @@ def validate_plan(
     *,
     stability: StabilityPolicy | None = None,
     sag: SagCap | None = None,
+    joints: JointCap | None = None,
 ) -> tuple[bool, str]:
     """Re-simulate ``tasks`` against footing/reach/round-trip rules.
 
@@ -320,10 +369,13 @@ def validate_plan(
     empty, and approach -> depot path after placing. When ``stability`` is
     set, each prefix must also pass :func:`~sim.stability.is_stable`.
     When ``sag`` is set, each prefix must also pass
-    :func:`~sim.stability.sag_within`. Returns (ok, reason).
+    :func:`~sim.stability.sag_within`. When ``joints`` is set, each prefix
+    must also pass :func:`~sim.stability.joints_within`. Returns (ok, reason).
     """
     if sag is not None and stability is None:
         raise ValueError("a sag cap needs a StabilityPolicy for the frame")
+    if joints is not None and stability is None:
+        raise ValueError("a joint cap needs a StabilityPolicy for the frame")
     scratch = world.copy()
     geometry = geometry_factory(scratch)
 
@@ -345,6 +397,7 @@ def validate_plan(
                 geometry.foot_cells(approach),
                 stability,
                 carrying=True,
+                joints=joints,
                 **geometry.sag_parameters(),
             )
             if not ok_stance:
@@ -361,11 +414,16 @@ def validate_plan(
                 occupied_voxels(scratch), stability, sag
             ):
                 return False, f"{label}: partial structure exceeds the sag cap"
+            if joints is not None and not joints_within(
+                occupied_voxels(scratch), stability, joints
+            ):
+                return False, f"{label}: a face joint exceeds capacity × safety factor"
             ok_stance, why_stance = robot_stance_ok(
                 occupied_voxels(scratch),
                 geometry.foot_cells(approach),
                 stability,
                 carrying=False,
+                joints=joints,
                 **geometry.sag_parameters(),
             )
             if not ok_stance:

@@ -4,9 +4,12 @@
 
   Replay viewer for assembler-sim run logs (contract v1/v2/v3, see sim/metrics.py).
 
-  Logs may carry optional per-placement structure samples (displacement and
-  joint strain). Older logs omit that key and still play. The colors are a
+  Logs may carry optional per-placement structure samples (displacement,
+  joint strain, and, when a strength was configured, joint utilization).
+  Older logs omit that key and still play. The colors are a
   spring-network estimate; stiffness is not fit to printed specimens.
+  Utilization is demand/capacity in the force unit of that solve
+  (mass·g at k = 1), not a measured newton.
 
   3D logs may set meta.voxel_shape to "cuboctahedral". Absent, or "cubic",
   draws the usual boxes. The shape control is display-only: it does not
@@ -124,6 +127,7 @@
       <option value="displacement">displacement</option>
       <option value="axial">axial strain</option>
       <option value="shear">shear strain</option>
+      <option value="utilization">joint utilization</option>
     </select>
   </label>
   <label id="deformWrap" class="needs-structure" title="Off draws each block on the cell where it was placed. Above 0, the longest displacement in the current sample is drawn as this fraction of the voxel pitch. 0.20 is a mild exaggeration. The slider stops at 0.40. The picture is normalized and is not a length in mg/k. Block size shrinks if needed so neighbors and the ground stay separated.">exaggerate
@@ -318,13 +322,16 @@ scene.add(buildGroup);
 
 let frame = 0, playing = false, elapsed = 0;
 let highlight = null;
-let scaleMax = { displacement: 0, axial: 0, shear: 0 };
+let scaleMax = { displacement: 0, axial: 0, shear: 0, utilization: 0 };
+let hasUtilization = false;
 const _off = new THREE.Vector3();
 
 /* Viridis-like sequential ramp, and a blue–white–red diverging ramp
    for signed axial strain (compression on the left). */
 const VIRIDIS = [[68, 1, 84], [59, 82, 139], [33, 144, 141], [93, 201, 98], [253, 231, 37]];
 const DIVERGE = [[37, 99, 235], [191, 219, 254], [248, 250, 252], [254, 202, 202], [220, 38, 38]];
+/* Under capacity is green, the allowable is amber, past it is red. */
+const UTIL = [[22, 101, 52], [234, 179, 8], [185, 28, 28]];
 function ramp(stops, t) {
   t = Math.min(1, Math.max(0, t));
   const x = t * (stops.length - 1);
@@ -404,6 +411,7 @@ function indexSample(s) {
   for (const d of s.displacements || []) disp.set(d.cell.join(","), d.u);
   const axial = new Map();
   const shear = new Map();
+  const util = new Map();
   for (const j of s.joints || []) {
     for (const cell of [j.a, j.b]) {
       const key = cell.join(",");
@@ -411,9 +419,13 @@ function indexSample(s) {
       if (prevA === undefined || Math.abs(j.axial) > Math.abs(prevA)) axial.set(key, j.axial);
       const prevS = shear.get(key);
       if (prevS === undefined || j.shear > prevS) shear.set(key, j.shear);
+      if (typeof j.utilization === "number") {
+        const prevU = util.get(key);
+        if (prevU === undefined || j.utilization > prevU) util.set(key, j.utilization);
+      }
     }
   }
-  s._idx = { disp, axial, shear };
+  s._idx = { disp, axial, shear, util };
   return s._idx;
 }
 function structureAt(frameIndex) {
@@ -424,7 +436,8 @@ function structureAt(frameIndex) {
   return null;
 }
 function computeScales(data) {
-  scaleMax = { displacement: 0, axial: 0, shear: 0 };
+  scaleMax = { displacement: 0, axial: 0, shear: 0, utilization: 0 };
+  hasUtilization = false;
   for (const f of data.ticks) {
     const s = f.structure;
     if (!s || s.error) continue;
@@ -435,6 +448,10 @@ function computeScales(data) {
     for (const j of s.joints || []) {
       scaleMax.axial = Math.max(scaleMax.axial, Math.abs(j.axial));
       scaleMax.shear = Math.max(scaleMax.shear, j.shear);
+      if (typeof j.utilization === "number") {
+        hasUtilization = true;
+        scaleMax.utilization = Math.max(scaleMax.utilization, j.utilization);
+      }
     }
   }
 }
@@ -465,7 +482,18 @@ function colorFor(key, mode, held) {
     if (!idx.shear.has(key)) return null;
     return ramp(VIRIDIS, idx.shear.get(key) / (scaleMax.shear || 1));
   }
+  if (mode === "utilization") {
+    if (!idx.util.has(key)) return null;
+    const allow = utilizationScale();
+    return ramp(UTIL, idx.util.get(key) / allow);
+  }
   return null;
+}
+function utilizationScale() {
+  const meta = (run && run.meta && run.meta.structure) || {};
+  const factor = Number(meta.safety_factor);
+  const allow = Number.isFinite(factor) && factor > 0 ? factor : 1;
+  return Math.max(scaleMax.utilization, allow);
 }
 function drawColorbar(mode) {
   const meta = (run.meta && run.meta.structure) || {};
@@ -488,19 +516,30 @@ function drawColorbar(mode) {
     hi = fmt(scaleMax.axial);
     mid = "0";
     stops = DIVERGE;
-  } else {
+  } else if (mode === "shear") {
     title = "shear strain proxy (Δu / pitch)";
     lo = "0";
     hi = fmt(scaleMax.shear);
     mid = fmt(scaleMax.shear / 2);
     stops = VIRIDIS;
+  } else {
+    const allow = utilizationScale();
+    title = "joint utilization (demand / capacity)";
+    lo = "0";
+    hi = fmt(allow);
+    mid = fmt(allow / 2);
+    stops = UTIL;
   }
   $("cbarTitle").textContent = title;
   $("cbarLo").textContent = lo;
   $("cbarMid").textContent = mid;
   $("cbarHi").textContent = hi;
-  $("cbarNote").textContent = meta.note
+  let note = meta.note
     || "Model estimate. Stiffness has not been fit to printed specimens.";
+  if (mode === "utilization" && !hasUtilization) {
+    note = "This log has no joint capacity, so utilization is not colored. " + note;
+  }
+  $("cbarNote").textContent = note;
   const canvas = $("cbar");
   const ctx = canvas.getContext("2d");
   const w = canvas.width, h = canvas.height;

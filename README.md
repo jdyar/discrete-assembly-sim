@@ -18,13 +18,14 @@ git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-asse
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m unittest                 # 209 tests
+python -m unittest                 # 229 tests
 python main.py bridge              # 1 robot, gate on, strain log -> runs/bridge.json
 python main.py cuboct              # 2×2×2 cuboctahedra -> runs/cuboct.json
 python main.py stability          # 312-trial gate campaign -> docs/stability_cost.csv
 python main.py onlattice          # crane vs on-lattice, with robot weight -> docs/on_lattice.csv
 python main.py scaffold           # temporary supports -> docs/scaffold_campaign.csv
 python main.py armadas            # shelter benchmark sweep -> docs/armadas_sweep.csv
+python main.py joints             # joint vs sag limits -> docs/joint_limits_summary.txt
 ```
 
 Open `replay_viewer.html` and drop `runs/bridge.json` on it (or serve the repo root with `python -m http.server` and it loads `runs/latest.json`). Displacement color and a marker on the worst-sag cell appear only when the log has samples. The blocks are drawn on the cells where they were placed. An exaggerate slider, off until you move it, redraws the longest arrow as a fraction of the voxel pitch. `pip install git+https://github.com/jdyar/discrete-assembly-sim.git` then `import sim` prints **0.1.0** until the tag.
@@ -54,11 +55,12 @@ The gate and the sag solver stay out of the planner unless a caller passes a `St
 - **Cuboctahedral voxels** (`sim/cuboct.py`, `python main.py cuboct`). Optional. Same six face-neighbors and the same lumped springs, so the closed forms still hold. Twelve vertices at the edge midpoints of the bounding cube, and four joint sites at the corners of the shared square. The cubic solid stays the default. Geometry only: not a calibrated model of the ARMADAS voxel ([Gregg et al. 2024](https://doi.org/10.1126/scirobotics.adi2746)).
 - **Stability precheck.** Before the order search, overhang in the *finished* structure lower-bounds every prefix. A blueprint that already fails the cantilever limit is rejected without spending the node budget. The screen does not reject a blueprint the search could return.
 - **Temporary scaffold.** When the finished blueprint passes the caps and no reachable order does, the planner adds the smallest set of support voxels in the column under the blueprint, builds with them, and removes them in an order that stays inside the same caps. Robots, including the on-lattice inchworm, can walk on scaffold. The search minimizes the count, then a single-robot travel score. The swarm tick count is measured separately. `k = 1` is not a fit. `python main.py scaffold` writes [`docs/scaffold_campaign.csv`](docs/scaffold_campaign.csv). The long form is [WHITEPAPER.md](WHITEPAPER.md) §4.4 and §6.8.
+- **Joint strength.** Each face spring can carry a compression, tension, shear, and optional moment capacity beside its stiffness. The load is the spring force from the same solve, in units of `mass·g` at `k = 1`. A `JointCap` rejects an order where any joint exceeds capacity times a safety factor. The published 3×3×3 cube gives a derived face compression of 1057.2365952 N; that number is not applied to a `k = 1` row. `python main.py joints` writes which builds are shear-limited, compression-limited, or both, and that a cap at the finished demand does not add scaffold. The PLA cantilever table stays `PENDING` and measures `k_shear` only. Joint strength from a connector print is a separate `PENDING` hook in [`docs/VALIDATION.md`](docs/VALIDATION.md). Long form: [WHITEPAPER.md](WHITEPAPER.md) §3.5 and §6.10.
 
 - **On-lattice inchworm** (`sim/inchworm.py`). Opt-in. The default robot still stands in an empty cell. The inchworm grips two voxel faces, steps one foot at a time, and places a voxel on a face it can reach from that stance. Stride, span, place reach, and which faces are walkable are configuration; the module docstring says which of those numbers are in the BILL-E and SOLL-E papers and which are not. Robot weight is a point load at the foot voxels, also off unless a caller sets a mass.
 - **That comparison** (`python main.py onlattice`, 108 trials, `docs/on_lattice.csv`). Numbers in the next section. `k = 1`.
 
-197 tests cover the traps, the 3D repair loop, fuzz, the examples, the screen, the precheck, the strain log, the bridge span, a smoke run of each campaign, the cuboct solid, the gait, the tip point-load closed form `P·n/k_shear`, and scaffold insertion and removal.
+The suite covers the traps, the 3D repair loop, fuzz, the examples, the screen, the precheck, the strain log, the bridge span, a smoke run of each campaign, the cuboct solid, the gait, the tip point-load closed form `P·n/k_shear`, scaffold insertion and removal, the shelter benchmark, and the joint-utilization gate (closed-form spring forces, the 3×3×3 derivation, and a crane span-4 cap that stays at 0 scaffold until the finished demand is cut in half). The count is in the quickstart.
 
 ## Results
 

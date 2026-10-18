@@ -1,0 +1,42 @@
+Joint limit vs sag limit. k = mass = g = 1.
+Force unit: mass·g. Sag unit: mass·g/k. Stiffness is not a fit.
+
+Published 3×3×3 cube (not applied to the rows below):
+  strength 11.38 kPa (SD 0.51), status confirmed
+  manuscript strength 11.17 kPa (±0.77); not averaged
+  failure load confirmed as a lower bound, not a mean: > 9000 N
+  stiffness 1.1129 MPa, status confirmed; SD unconfirmed (HTML 'SD ±0.779 kPa', manuscript ±0.043 MPa)
+  gross area 0.83612736 m^2 = (3 × 0.3048 m)^2
+  implied mean load 9515.129357 N (derived from published strength × gross area; not printed)
+  face compression 1057.236595 N (SD 47.380550 N from the strength SD only)
+  shear: None; moment: None
+  fastener tension 797.3 N ± 8.71: confirmed as a fixture break load of one fastener pair; the paper says this is not the voxel separation force; not used
+
+Finished demands
+  cantilever n=3: sag 6, compression 0, tension 0, shear 3; half-caps reject compression=False shear=True sag=True; binder: shear+sag (compression demand ~0)
+  tower n=3: sag 6, compression 3, tension 0, shear 0; half-caps reject compression=True shear=False sag=True; binder: compression+sag (shear demand ~0)
+  cantilever n=6: sag 21, compression 0, tension 0, shear 6; half-caps reject compression=False shear=True sag=True; binder: shear+sag (compression demand ~0)
+  tower n=6: sag 21, compression 6, tension 0, shear 0; half-caps reject compression=True shear=False sag=True; binder: compression+sag (shear demand ~0)
+  bridge span=4: sag 4.5, compression 2.5, tension 0, shear 1.5; half-caps reject compression=True shear=True sag=True; binder: compression+shear+sag
+  bridge span=4 one-sided: sag 15, compression 5, tension 0, shear 4; half-caps reject compression=True shear=True sag=True; binder: compression+shear+sag
+  bridge span=5: sag 6, compression 3, tension 0, shear 2; half-caps reject compression=True shear=True sag=True; binder: compression+shear+sag
+  bridge span=5 one-sided: sag 21, compression 6, tension 0, shear 5; half-caps reject compression=True shear=True sag=True; binder: compression+shear+sag
+  bridge span=6: sag 8, compression 3.5, tension 0, shear 2.5; half-caps reject compression=True shear=True sag=True; binder: compression+shear+sag
+  bridge span=6 one-sided: sag 28, compression 7, tension 0, shear 6; half-caps reject compression=True shear=True sag=True; binder: compression+shear+sag
+  ARMADAS shelter: sag 48.7104, compression 10.344, tension 0.0934695, shear 3.164; half-caps reject compression=True shear=True sag=True; binder: compression+shear+sag
+  cantilever n=3 tip load P=2: sag 12, compression 0, tension 0, shear 5; half-caps reject compression=False shear=True sag=True; binder: shear+sag (compression demand ~0); root shear 3 -> 5 (closed form 5)
+
+Scaffold counts
+  span 4 crane: finished shear 1.5, one-sided shear 4, gap 2.5; sag-only 0 (ok); joint at finished demand 0 (ok); mid-gap 0 (ok); half finished demand — (infeasible)
+  span 5 crane: finished shear 2, one-sided shear 5, gap 3; sag-only 0 (ok); joint at finished demand 0 (ok); mid-gap 0 (ok); half finished demand — (infeasible)
+  span 6 crane: finished shear 2.5, one-sided shear 6, gap 3.5; sag-only 0 (ok); joint at finished demand 0 (ok); mid-gap 0 (ok); half finished demand — (infeasible)
+  span 4 inchworm: finished shear 1.5, one-sided shear 4, gap 2.5; sag-only 3 (ok); joint at finished demand 3 (ok); mid-gap 3 (ok); half finished demand — (infeasible)
+
+Level-2 arms and towers (crane)
+  level-2 cantilever length=3: sag 10, compression 4, shear 3; sag-only 0 (ok); joint at finished demand 0 (ok); half — (infeasible)
+  level-2 cantilever length=6: sag 28, compression 7, shear 6; sag-only 0 (ok); joint at finished demand 0 (ok); half — (infeasible)
+  tower n_free=3: sag 6, compression 3, shear 0; sag-only 0 (ok); joint at finished demand 0 (ok); half — (infeasible)
+  tower n_free=6: sag 21, compression 6, shear 0; sag-only 0 (ok); joint at finished demand 0 (ok); half — (infeasible)
+
+Reading. A cap at the finished demand does not add scaffold: a balanced bridge order, and a propped inchworm order, stay at or under that demand, and the search stops at the sag-only count. A cap at half the finished demand rejects the blueprint itself. Scaffold is removed at the end, so it cannot rescue that rejection. The count goes from the sag-only number to infeasible. It does not step up. One-sided deck shear is higher than the finished beam, and that prefix fails the finished-demand cap; the crane has another order, so its count stays 0. k = 1 throughout. The newton face capacity above is not a row.
+

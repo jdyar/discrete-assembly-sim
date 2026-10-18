@@ -17,6 +17,8 @@ log goes to runs/latest.json for the replay viewer.
     python main.py scaffold   # temporary supports -> docs/scaffold_campaign.*
     python main.py armadas    # shelter throughput sweep -> docs/armadas_sweep.*
     python main.py armadas smoke
+    python main.py joints     # joint vs sag limits -> docs/joint_limits.*
+    python main.py joints smoke
 """
 
 from __future__ import annotations
@@ -634,6 +636,11 @@ def main() -> None:
         from experiments.armadas import main as armadas_main
 
         armadas_main(sys.argv[2:])
+        return
+    elif mode == "joints":
+        from experiments.joint_limits import main as joints_main
+
+        joints_main(sys.argv[2:])
         return
     elif mode == "swarm":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 2

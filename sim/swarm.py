@@ -259,6 +259,7 @@ class Swarm:
         operations: list[tuple[str, Node]] | None = None,
         scaffold_cells: tuple | set = (),
         sag: SagCap | None = None,
+        joints=None,
     ) -> None:
         if len(set(starts)) != len(starts):
             raise ValueError("robot starts must be distinct")
@@ -269,6 +270,7 @@ class Swarm:
         self.robots = [SwarmRobot(i, s) for i, s in enumerate(starts)]
         self.stability = stability
         self.sag = sag
+        self.joints = joints
         self.scaffold_cells = frozenset(scaffold_cells)
         self.sequencer = Sequencer(
             world,
@@ -473,6 +475,7 @@ class Swarm:
                 static_obstacles=self._obstacles_for(r),
                 stability=self.stability,
                 sag=self.sag,
+                joints=self.joints,
             )
         else:
             plan = plan_task(
@@ -491,6 +494,7 @@ class Swarm:
                 stability=self.stability,
                 sag=self.sag,
                 check_buildability=not self.sequencer.scripted,
+                joints=self.joints,
             )
         if plan is None:
             self._try_hold(r)

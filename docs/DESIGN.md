@@ -66,9 +66,20 @@ proposal. It does not count an unplaced deed as a support: a
 reservation does not carry load. Connectivity still counts deeds,
 because a cell that will be solid can trap a robot.
 
-The sag estimate is not a gate. It is a dense `Ku = mg` solve (voxels
-as nodes, face joints as axial and shear springs) that reports the
-worst displacement of a partial build. It is not run inside the search.
+The sag solve is a dense `Ku = mg` (voxels as nodes, face joints as
+axial and shear springs). It reports the worst displacement of a
+partial build. It becomes a gate only when the caller passes a
+`SagCap`: `sag_within` then runs on every prefix inside the search.
+A `JointCap`, when one is passed, is a second gate on the same
+prefixes (`joints_within` in `sim/stability.py`). Utilization is
+demand/capacity, and the allowable is capacity times a safety factor
+in `(0, 1]`. A component left unset is not checked. The force is
+`k` times relative displacement, so at the defaults it is `mass·g`,
+not a newton. The derived ARMADAS face compression stays in newtons
+and is not that cap. Both caps are off unless passed. The moment
+slot exists; the spring network has no rotational degree of freedom,
+so a solved load carries no moment.
+
 Default-off is load-bearing: `max_cantilever=0` rejects spans, including
 a hollow-box roof. The planner applies that screen to the finished
 blueprint before it searches (`stability_precheck`): a voxel's overhang
@@ -82,7 +93,9 @@ stiffness in that run is the unfitted default k = 1.
 When the finished blueprint passes those caps and no reachable order
 does, `plan_with_scaffold` (`sim/scaffold.py`) adds the smallest set of
 temporary supports in the column under the blueprint, builds with them,
-and removes them in an order that stays inside the same caps. Scaffold
+and removes them in an order that stays inside the same caps.
+When a `JointCap` is passed, every prefix and every removal also stays
+inside it (§6.10 of the whitepaper, `python main.py joints`). Scaffold
 is solid, so a robot can walk on it, and it is not a blueprint cell.
 The search minimizes the count, then a single-robot travel score.
 The swarm tick count is a separate measurement (`python main.py
@@ -97,9 +110,11 @@ The same estimate can be written into the run log. A `StructureLog`
 attached to a `RunLog` is off by default; without it, frames are
 unchanged. When it is set, each sampled occupancy change — a placement
 or a removal, every `every` such changes — stores that tick's per-voxel
-displacement and a per-joint strain proxy (relative displacement over
-pitch, axial and shear separate). The replay viewer colors from
-those samples and still opens logs that omit them. Blocks stay on
+displacement, a per-joint strain proxy (relative displacement over
+pitch, axial and shear separate), and the spring force. When a
+strength is set, the sample also stores utilization. The replay
+viewer colors from those samples, including utilization, and still
+opens logs that omit them. Blocks stay on
 the cells where they were placed unless the exaggerate slider is
 moved; that slider draws the longest arrow as a fraction of the
 voxel pitch and labels the picture exaggerated and normalized.
