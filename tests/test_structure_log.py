@@ -11,13 +11,18 @@ from __future__ import annotations
 import json
 import time
 import unittest
+from pathlib import Path
 
 from main import (
     BRIDGE_CANTILEVER,
+    BRIDGE_DECK_COLS,
     BRIDGE_DEPOT,
+    BRIDGE_PIER_COLS,
+    BRIDGE_ROWS,
     build_bridge_world,
     build_world,
     run,
+    run_bridge,
 )
 from sim.geometry import SquareLattice2D
 from sim.geometry3d import CubicLattice3D
@@ -31,7 +36,7 @@ from sim.stability import (
     occupied_voxels,
     shear_cantilever_tip_sag,
 )
-from sim.world import World
+from sim.world import EMPTY, VOXEL, World
 from sim.world3d import World3D
 
 # Finite clamp under a single root. The stock ground plane would plant
@@ -314,6 +319,67 @@ class TestBridgeDemo(unittest.TestCase):
             world, plan, BRIDGE_DEPOT, CubicLattice3D, stability=policy
         )
         self.assertTrue(ok, why)
+
+    def test_finished_log_matches_bridge_blueprint(self) -> None:
+        """The deck is a span: two piers, air under midspan, log equals blueprint."""
+        world = build_bridge_world()
+        blueprint = [
+            tuple(int(v) for v in node) for node in zip(*world.blueprint.nonzero())
+        ]
+        self.assertEqual(len(blueprint), 18)
+        self.assertEqual(len(blueprint), len(set(blueprint)))
+        piers = {(1, row, col) for row in BRIDGE_ROWS for col in BRIDGE_PIER_COLS}
+        deck = {(2, row, col) for row in BRIDGE_ROWS for col in BRIDGE_DECK_COLS}
+        self.assertEqual(len(piers), 4)
+        self.assertEqual(len(deck), 14)
+        self.assertEqual(set(blueprint), piers | deck)
+        # Column 6 is the midspan. The cell under each deck cell there is empty.
+        for row in BRIDGE_ROWS:
+            self.assertIn((2, row, 6), deck)
+            self.assertNotIn((1, row, 6), set(blueprint))
+            self.assertEqual(int(world.occupancy[1, row, 6]), EMPTY)
+
+        log, _swarm = run_bridge(verbose=False)
+        placed: list[tuple[int, int, int]] = []
+        seen: set[tuple[int, int, int]] = set()
+        for frame in log.frames:
+            current = _voxel_cells(frame["occupancy"])
+            occupied = set(current)
+            self.assertEqual(len(current), len(occupied))
+            added = [cell for cell in current if cell not in seen]
+            for cell in added:
+                self.assertNotIn(cell, placed)
+            placed.extend(added)
+            seen = occupied
+            for robot in frame["robots"]:
+                self.assertNotIn(tuple(int(v) for v in robot["pos"]), occupied)
+        self.assertEqual(len(placed), 18)
+        self.assertEqual(len(placed), len(set(placed)))
+        self.assertEqual(set(placed), set(blueprint))
+        final = log.frames[-1]
+        final_cells = _voxel_cells(final["occupancy"])
+        self.assertEqual(set(final_cells), set(blueprint))
+        self.assertEqual(len(final_cells), 18)
+        self.assertEqual(final["placed"], 18)
+        for row in BRIDGE_ROWS:
+            self.assertEqual(final["occupancy"][2][row][6], VOXEL)
+            self.assertEqual(final["occupancy"][1][row][6], EMPTY)
+
+        saved = json.loads(Path("runs/bridge.json").read_text())
+        saved_cells = _voxel_cells(saved["ticks"][-1]["occupancy"])
+        self.assertEqual(set(saved_cells), set(blueprint))
+        self.assertEqual(len(saved_cells), len(set(saved_cells)))
+        self.assertEqual([tuple(n) for n in saved["blueprint"]], blueprint)
+
+
+def _voxel_cells(occ) -> list[tuple[int, int, int]]:
+    found = []
+    for level, plane in enumerate(occ):
+        for row, line in enumerate(plane):
+            for col, value in enumerate(line):
+                if value == VOXEL:
+                    found.append((level, row, col))
+    return found
 
 
 if __name__ == "__main__":

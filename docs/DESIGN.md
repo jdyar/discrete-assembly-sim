@@ -84,8 +84,11 @@ attached to a `RunLog` is off by default; without it, frames are
 unchanged. When it is set, each sampled occupancy change — a placement
 or a removal, every `every` such changes — stores that tick's per-voxel
 displacement and a per-joint strain proxy (relative displacement over
-pitch, axial and shear separate). The replay viewer colors and
-exaggerates from those samples and still opens logs that omit them.
+pitch, axial and shear separate). The replay viewer colors from
+those samples and still opens logs that omit them. Blocks stay on
+the cells where they were placed unless the exaggerate slider is
+moved; that slider draws the longest arrow as a fraction of the
+voxel pitch and labels the picture exaggerated and normalized.
 The numbers are the model. A stiffness fit to printed specimens, and a
 displacement limit inside the gate, are still open.
 
