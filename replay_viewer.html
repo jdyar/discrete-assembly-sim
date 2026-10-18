@@ -18,7 +18,11 @@
       the file picker). Produce a log with `python main.py` -> runs/latest.json
     - If served over http from the repo root (e.g. `python -m http.server`),
       it auto-loads runs/latest.json.
-      Query: ?log=runs/bridge.json&color=displacement&deform=0.4&frame=0
+      Query: ?log=runs/bridge.json&color=displacement&deform=0&frame=last
+      deform is off by default (true as-built geometry, color only).
+      A value such as 0.2 turns exaggeration on: the longest displacement
+      arrow is drawn as that fraction of the voxel pitch, capped at 0.4.
+      It is not a multiplier on the mg/k vector.
     - scripts/render_demo.py drives the page through window.assemblerReplay
       (setFrame, setColor, setDeform, setOrbit). That object is a capture
       hook. It does not change playback for a person using the page.
@@ -66,7 +70,8 @@
     border: 1px solid #334155; border-radius: 6px; padding: 4px 8px; }
   #shapeWrap { display: flex; align-items: center; gap: 6px; color: #94a3b8; }
   body.is-2d #shapeWrap { display: none !important; }
-  #deform { width: 200px; accent-color: #a3e635; }
+  #deform { width: 140px; accent-color: #a3e635; }
+  #deformVal { color: #d9f99d; }
   #sagReadout { color: #fde68a; min-width: 180px; }
   #colorbar {
     position: fixed; left: 14px; bottom: 16px; z-index: 2;
@@ -120,9 +125,9 @@
       <option value="shear">shear strain</option>
     </select>
   </label>
-  <label id="deformWrap" class="needs-structure" title="Multiplies model displacement. 1× draws displacement/pitch in voxel lengths. Above 1× exaggerates. Unfitted k=1 can sag by several voxels, so start below 1.">scale
-    <input id="deform" type="range" min="0" max="2" value="0" step="0.01" />
-    <span id="deformVal">0×</span>
+  <label id="deformWrap" class="needs-structure" title="Off draws each block on the cell where it was placed. Above 0, the longest displacement in the current sample is drawn as this fraction of the voxel pitch. 0.20 is a mild exaggeration. The slider stops at 0.40. The picture is normalized and is not a length in mg/k. Block size shrinks if needed so neighbors and the ground stay separated.">exaggerate
+    <input id="deform" type="range" min="0" max="0.4" value="0" step="0.01" />
+    <span id="deformVal">off · true geometry</span>
   </label>
   <span id="sagReadout" class="needs-structure"></span>
   <span id="cageKey" class="needs-structure"><b style="color:#fff">□</b> worst sag</span>
@@ -297,6 +302,7 @@ let legend = LEGEND_DEFAULT;
 let cells = new Map();    // "r,c" -> mesh for buildable cells
 let blueprintSet = new Set();
 let robotMeshes = [], carryMeshes = [];
+let groundAt = new Map(); // "l,r,c" -> ground mesh (rest pose, never deformed)
 let buildGroup = new THREE.Group();
 scene.add(buildGroup);
 
@@ -325,9 +331,61 @@ function fmt(v) {
 function dispOffset(node, u, target) {
   // Cell-coordinate displacement -> Three.js axes. 3D node is
   // [level, row, col] drawn as (col, level, row). 2D row grows downward.
-  if (node.length === 3) target.set(u[2] || 0, u[0] || 0, u[1] || 0);
-  else target.set(u[1] || 0, -(u[0] || 0), 0);
+  // Use ?? so a real 0 stays 0. Negative sag must pass through.
+  if (node.length === 3) target.set(u[2] ?? 0, u[0] ?? 0, u[1] ?? 0);
+  else target.set(u[1] ?? 0, -(u[0] ?? 0), 0);
   return target;
+}
+
+/* Slider units are a fraction of the voxel pitch, not mg/k.
+   0 = as-built cells. The cap keeps a requested exaggeration from
+   becoming several voxel-lengths when k = 1. */
+const DISPLAY_FRACTION_CAP = 0.4;
+const BOX = 0.96;
+const HALF = BOX / 2;
+const GAP = 0.04;
+const ROBOT_HALF = 0.35;
+
+function clampDisplayFraction(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(DISPLAY_FRACTION_CAP, n);
+}
+
+function displacementLength(u) {
+  let sum = 0;
+  for (const c of u) sum += c * c;
+  return Math.sqrt(sum);
+}
+
+/* Longest drawn arrow = fraction * pitch. alpha multiplies the raw
+   displacement (same length units as pitch). */
+function displayAlpha(maxLen, fraction, pitch) {
+  if (fraction <= 0 || maxLen <= 0) return 0;
+  return (fraction * pitch) / maxLen;
+}
+
+/* Uniform box half-extent so deformed centers stay apart and clear of
+   the ground. Ground blocks keep HALF; only the built voxels scale. */
+function fittedHalf(voxels, grounds, alpha) {
+  let limit = HALF;
+  const sepOf = (a, b) => Math.max(
+    Math.abs(a.x - b.x + alpha * (a.ux - b.ux)),
+    Math.abs(a.y - b.y + alpha * (a.uy - b.uy)),
+    Math.abs(a.z - b.z + alpha * (a.uz - b.uz)),
+  );
+  for (let i = 0; i < voxels.length; i++) {
+    for (let j = i + 1; j < voxels.length; j++) {
+      const room = (sepOf(voxels[i], voxels[j]) - GAP) / 2;
+      if (room < limit) limit = room;
+    }
+    for (let g = 0; g < grounds.length; g++) {
+      const room = sepOf(voxels[i], grounds[g]) - GAP - HALF;
+      if (room < limit) limit = room;
+    }
+  }
+  if (limit < 0.12) return 0.12;
+  return limit;
 }
 function indexSample(s) {
   if (!s || s.error) return null;
@@ -480,6 +538,7 @@ function loadRun(data) {
   buildGroup = new THREE.Group();
   scene.add(buildGroup);
   cells = new Map();
+  groundAt = new Map();
   blueprintSet = new Set(data.blueprint.map(n => n.join(",")));
 
   const nodes = [];
@@ -498,7 +557,9 @@ function loadRun(data) {
     if (occAt(occ0, n) === legend.GROUND) {
       const g = new THREE.Mesh(unitBox, matGround);
       g.position.copy(pos);
+      g.userData.rest = pos.clone();
       buildGroup.add(g);
+      groundAt.set(n.join(","), g);
     } else {
       const m = new THREE.Mesh(unitBox, matVoxel);
       m.position.copy(pos);
@@ -517,6 +578,8 @@ function loadRun(data) {
                               matRobots[i % matRobots.length]);
     const cm = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), matCarry);
     rm.visible = cm.visible = false;
+    rm.renderOrder = 2;
+    cm.renderOrder = 3;
     buildGroup.add(rm, cm);
     robotMeshes.push(rm); carryMeshes.push(cm);
   }
@@ -539,16 +602,19 @@ function loadRun(data) {
     ? requestedColor
     : (structural ? "displacement" : "material");
   const requestedScale = viewParams.get("deform");
-  $("deform").value = requestedScale != null && requestedScale !== "" ? requestedScale : "0";
-  $("deformVal").textContent = "0×";
+  $("deform").value = String(
+    requestedScale != null && requestedScale !== ""
+      ? clampDisplayFraction(requestedScale)
+      : 0,
+  );
+  $("deformVal").textContent = "off · true geometry";
 
   const requestedShape = viewParams.get("shape");
   applyVoxelShape(
     data.version === 3 ? (requestedShape || voxelShapeFromLog(data)) : "cubic",
   );
 
-  orbit.target = new THREE.Vector3(0, (data.version === 3 ? levels : rows) / 2, 0);
-  orbit.radius = Math.max(rows, cols, (levels || 0) * 2) * 1.9;
+  frameContent(data);
   if (viewParams.has("theta")) orbit.theta = Number(viewParams.get("theta"));
   if (viewParams.has("phi")) orbit.phi = Number(viewParams.get("phi"));
   if (viewParams.has("radius")) orbit.radius = Number(viewParams.get("radius"));
@@ -564,6 +630,51 @@ function loadRun(data) {
   $("drop").classList.add("hidden");
 }
 
+/* Aim at the blueprint, with the floor in frame on a 3D log, from a
+   low oblique so a span reads from the side. Query params override. */
+function frameContent(data) {
+  const { rows, cols, levels } = data.meta;
+  const nodes = data.blueprint || [];
+  if (!nodes.length) {
+    orbit.target.set(0, (data.version === 3 ? levels : rows) / 2, 0);
+    orbit.radius = Math.max(rows, cols, (levels || 0) * 2) * 1.9;
+    return;
+  }
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  for (const n of nodes) {
+    const p = nodePos(n);
+    min.min(p);
+    max.max(p);
+  }
+  if (data.version === 3) min.y = Math.min(min.y, 0);
+  orbit.target.copy(min).add(max).multiplyScalar(0.5);
+  const size = max.clone().sub(min);
+  const vFov = camera.fov * Math.PI / 180;
+  const aspect = camera.aspect || (16 / 9);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+  const pad = 1.8;
+  const fitY = (size.y + pad) / (2 * Math.tan(vFov / 2));
+  const span = Math.max(size.x, size.z);
+  const fitX = (span + pad) / (2 * Math.tan(hFov / 2));
+  orbit.radius = Math.max(4, fitX, fitY) * 1.2;
+  if (!viewParams.has("theta")) {
+    orbit.theta = size.x >= size.z ? 0.28 : Math.PI / 2 + 0.28;
+  }
+  if (!viewParams.has("phi")) orbit.phi = 1.22;
+}
+
+function supportMesh(node, occ) {
+  if (!node || node.length !== 3 || node[0] < 0) return null;
+  if (node[0] >= occ.length) return null;
+  const v = occAt(occ, node);
+  if (v === legend.GROUND) return groundAt.get(node.join(",")) || null;
+  if (v === legend.VOXEL || (legend.DEFECT !== undefined && v === legend.DEFECT)) {
+    return cells.get(node.join(",")) || null;
+  }
+  return null;
+}
+
 function setFrame(i) {
   if (!run) return;
   frame = Math.max(0, Math.min(run.ticks.length - 1, i));
@@ -571,30 +682,75 @@ function setFrame(i) {
   const occ = f.occupancy;
 
   const mode = $("colorMode").value;
-  const scale = Number($("deform").value) || 0;
+  const fraction = clampDisplayFraction($("deform").value);
   const held = structureAt(frame);
   const meta = (run.meta && run.meta.structure) || {};
   const pitch = meta.pitch || 1;
   const idx = held && !held.sample.error ? indexSample(held.sample) : null;
+  let maxLen = 0;
+  if (idx && fraction > 0) {
+    for (const u of idx.disp.values()) maxLen = Math.max(maxLen, displacementLength(u));
+  }
+  const alpha = displayAlpha(maxLen, fraction, pitch);
 
+  const solids = [];
+  const solidKeys = [];
   for (const [key, mesh] of cells) {
     const n = key.split(",").map(Number);
     const v = occAt(occ, n);
     const solid = v === legend.VOXEL || (legend.DEFECT !== undefined && v === legend.DEFECT);
+    mesh.position.copy(mesh.userData.rest);
+    mesh.scale.setScalar(1);
     if (solid) {
       mesh.visible = true;
       const rgb = colorFor(key, mode, held);
       if (rgb) paint(mesh, rgb);
       else mesh.material = (v === legend.DEFECT) ? matDefect : matVoxel;
+      const rec = {
+        x: mesh.userData.rest.x, y: mesh.userData.rest.y, z: mesh.userData.rest.z,
+        ux: 0, uy: 0, uz: 0,
+      };
+      if (idx && alpha !== 0) {
+        const u = idx.disp.get(key);
+        if (u) {
+          dispOffset(n, u, _off);
+          rec.ux = _off.x; rec.uy = _off.y; rec.uz = _off.z;
+        }
+      }
+      solids.push(rec);
+      solidKeys.push(key);
     } else if (blueprintSet.has(key)) {
       mesh.visible = true; mesh.material = matGhost;
     } else {
       mesh.visible = false;
     }
-    mesh.position.copy(mesh.userData.rest);
-    if (solid && idx && scale !== 0) {
-      const u = idx.disp.get(key);
-      if (u) mesh.position.add(dispOffset(n, u, _off).multiplyScalar(scale / pitch));
+  }
+
+  let half = HALF;
+  if (alpha !== 0 && solids.length) {
+    const grounds = [];
+    for (const g of groundAt.values()) {
+      const rest = g.userData.rest;
+      let near = false;
+      for (const s of solids) {
+        if (Math.abs(rest.x - s.x) <= 3 && Math.abs(rest.y - s.y) <= 3 && Math.abs(rest.z - s.z) <= 3) {
+          near = true;
+          break;
+        }
+      }
+      if (near) grounds.push({ x: rest.x, y: rest.y, z: rest.z, ux: 0, uy: 0, uz: 0 });
+    }
+    half = fittedHalf(solids, grounds, alpha);
+    const drawn = half / HALF;
+    for (let i = 0; i < solidKeys.length; i++) {
+      const mesh = cells.get(solidKeys[i]);
+      const rec = solids[i];
+      mesh.position.set(
+        rec.x + alpha * rec.ux,
+        rec.y + alpha * rec.uy,
+        rec.z + alpha * rec.uz,
+      );
+      mesh.scale.setScalar(drawn);
     }
   }
 
@@ -625,20 +781,48 @@ function setFrame(i) {
     const du = meta.displacement_units || "mg/k";
     const where = held.sample.worst_sag_cell ? held.sample.worst_sag_cell.join(",") : "–";
     const from = held.tick === f.tick ? "" : ` · held from tick ${held.tick}`;
+    const pose = fraction > 0 ? " · exaggerated, normalized" : " · true geometry";
     $("sagReadout").textContent =
-      `worst sag ${fmt(held.sample.worst_sag)} ${du} @ ${where}${from}`;
+      `worst sag ${fmt(held.sample.worst_sag)} ${du} @ ${where}${from}${pose}`;
     drawColorbar(mode);
+    if (fraction > 0) {
+      $("cbarNote").textContent =
+        "Exaggerated and normalized. The longest arrow is a fraction of the voxel pitch, not a model length. "
+        + (meta.note || "Stiffness has not been fit to printed specimens.");
+    }
   }
-  $("deformVal").textContent = `${scale}×`;
+  $("deformVal").textContent = fraction <= 0
+    ? "off · true geometry"
+    : `${fraction.toFixed(2)} × pitch · exaggerated, normalized`;
 
   const crew = f.robots ?? (f.robot ? [f.robot] : []);
   for (let i = 0; i < robotMeshes.length; i++) {
     const robot = crew[i];
     if (robot) {
       const pos = nodePos(robot.pos);
-      robotMeshes[i].position.copy(pos);
-      robotMeshes[i].visible = true;
-      carryMeshes[i].position.copy(pos).add(new THREE.Vector3(0, 0.62, 0));
+      const mesh = robotMeshes[i];
+      if (robot.pos.length === 3) {
+        const below = [robot.pos[0] - 1, robot.pos[1], robot.pos[2]];
+        const support = supportMesh(below, occ);
+        if (support) {
+          const rest = support.userData.rest;
+          const top = (BOX * support.scale.y) / 2;
+          mesh.position.set(
+            pos.x + (support.position.x - rest.x),
+            support.position.y + top + ROBOT_HALF,
+            pos.z + (support.position.z - rest.z),
+          );
+        } else {
+          // Side footing: sit on the top of this empty cell so the body
+          // is above the course beside it, not centered in that course.
+          mesh.position.set(pos.x, pos.y + HALF + ROBOT_HALF, pos.z);
+        }
+      } else {
+        mesh.position.set(pos.x, pos.y, 0.6);
+      }
+      mesh.visible = true;
+      carryMeshes[i].position.copy(mesh.position);
+      carryMeshes[i].position.y += ROBOT_HALF + 0.2;
       carryMeshes[i].visible = !!robot.carrying;
     } else {
       robotMeshes[i].visible = carryMeshes[i].visible = false;
@@ -684,8 +868,8 @@ addEventListener("drop", e => {
   if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
 });
 
-/* Optional view: ?log=runs/bridge.json&frame=last&color=displacement&deform=0.15
-   1× on the scale slider is the model displacement in voxel lengths. */
+/* Optional view: ?log=runs/bridge.json&frame=last&color=displacement&deform=0
+   deform is a fraction of the voxel pitch (0 = true geometry, cap 0.4). */
 const viewParams = new URLSearchParams(location.search);
 
 /* Auto-load runs/latest.json when served over http (fails silently on file://). */
@@ -708,7 +892,7 @@ window.assemblerReplay = {
   },
   setDeform(scale) {
     const input = $("deform");
-    input.value = String(scale);
+    input.value = String(clampDisplayFraction(scale));
     input.dispatchEvent(new Event("input"));
   },
   setOrbit(theta, phi, radius) {

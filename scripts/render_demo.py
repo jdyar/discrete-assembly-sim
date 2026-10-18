@@ -5,9 +5,11 @@
 Two clips, with title cards:
 
 1. Two robots building the two-pier bridge. Voxels are colored by the
-   spring-network displacement. The scale slider is above the 0.15× used
-   in the README still, so the sag reads on a recording. k = 1. The
-   number on the title card is read from the log this script just wrote.
+   spring-network displacement and drawn on the cells where they were
+   placed. Deformation stays off for that clip, so the deck remains a
+   span. k = 1. The number on the title card is read from the log this
+   script just wrote. A few seconds at the end turn the slider to 0.20
+   of a voxel pitch (exaggerated and normalized, not mg/k lengths).
 2. The 2×2×2 cuboct block (``python main.py cuboct``'s world). Display
    solid only. No stiffness.
 
@@ -43,12 +45,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Display multiplier on model displacement (voxel lengths per mg/k at
-# pitch 1). The README still uses 0.15× so the deck stays a deck.
-# 0.50× on this bridge (finished sag 8 mg/k) draws the midspan 4
-# voxel-lengths down, which is the exaggeration the recording is for.
-# The camera for that clip is a side view; a top-down orbit hides it.
-DEFORM = 0.50
+# Slider fraction of the voxel pitch. 0 draws the as-built cells.
+# 0.20 is the viewer's mild exaggeration: the longest arrow on screen
+# is 0.20 pitches, whatever the mg/k magnitude is. The cap in the
+# viewer is 0.40. The build clip stays at 0 so the span reads.
+DEFORM = 0.0
+DEFORM_HOLD = 0.20
 FPS = 10
 WIDTH = 1280
 HEIGHT = 720
@@ -58,6 +60,14 @@ BRIDGE_S = 36.0
 CUBOCT_TITLE_S = 4.0
 CUBOCT_S = 12.0
 END_S = 4.0
+# Side view of the span (X across the frame). theta is a little off
+# the pure profile so both deck rows read; phi stays low enough that
+# the air under the deck is in frame. Radius frames the blueprint,
+# not the empty ground around it.
+BRIDGE_PHI = 1.35
+BRIDGE_RADIUS = 9.2
+BRIDGE_THETA0 = 0.06
+BRIDGE_THETA1 = 0.22
 
 
 def _free_port() -> int:
@@ -82,6 +92,7 @@ def _build_logs() -> dict:
         BRIDGE_CANTILEVER,
         BRIDGE_DEPOT,
         build_bridge_world,
+        run_bridge,
         run_cuboct,
         run_swarm3d_build,
     )
@@ -124,6 +135,7 @@ def _build_logs() -> dict:
     peaks = [float(s["worst_sag"]) for s in samples]
     final = samples[-1]
 
+    one_log, _one_swarm = run_bridge(verbose=False)
     cuboct_log, cuboct_swarm = run_cuboct(verbose=False)
     if cuboct_log.meta.get("voxel_shape") != VOXEL_SHAPE_CUBOCTAHEDRAL:
         raise RuntimeError("cuboct log did not record voxel_shape")
@@ -136,9 +148,11 @@ def _build_logs() -> dict:
         "final_sag": float(final["worst_sag"]),
         "final_cell": final.get("worst_sag_cell"),
         "peak_sag": max(peaks),
+        "one_frames": len(one_log.frames),
         "cuboct_frames": len(cuboct_log.frames),
         "cuboct_ticks": cuboct_swarm.tick_count,
         "deform": DEFORM,
+        "deform_hold": DEFORM_HOLD,
     }
 
 
@@ -157,6 +171,38 @@ def _card(title: str, lines: list[str]) -> str:
 <body><main><h1>{title}</h1>{body}</main></body></html>"""
 
 
+def _open_log(page, url: str) -> None:
+    page.goto(url, wait_until="domcontentloaded")
+    page.wait_for_function(
+        "() => window.assemblerReplay && window.assemblerReplay.ready() "
+        "&& window.assemblerReplay.nFrames() > 0",
+        timeout=45_000,
+    )
+
+
+def _pose(page, *, sim: int, color: str | None, deform: float | None,
+          theta: float, phi: float, radius: float) -> None:
+    page.evaluate(
+        """async ({sim, color, deform, theta, phi, radius}) => {
+            const v = window.assemblerReplay;
+            v.setPlaying(false);
+            if (color) v.setColor(color);
+            if (deform != null) v.setDeform(deform);
+            v.setOrbit(theta, phi, radius);
+            v.setFrame(sim);
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        }""",
+        {
+            "sim": sim,
+            "color": color,
+            "deform": deform,
+            "theta": theta,
+            "phi": phi,
+            "radius": radius,
+        },
+    )
+
+
 def _shot_cards(page, directory: Path, prefix: str, html: str, n: int) -> None:
     page.set_content(html, wait_until="load")
     page.screenshot(path=str(directory / f"{prefix}0000.png"))
@@ -167,9 +213,21 @@ def _shot_cards(page, directory: Path, prefix: str, html: str, n: int) -> None:
             dest.write_bytes(src.read_bytes())
 
 
+def _sim_index(i: int, n_video: int, n_sim: int, finish_by: float) -> int:
+    """Map a video frame to a sim frame. finish_by < 1 holds the last pose."""
+    if n_sim <= 1 or n_video <= 1:
+        return 0
+    if finish_by >= 1:
+        return min(n_sim - 1, round(i / (n_video - 1) * (n_sim - 1)))
+    cut = finish_by * (n_video - 1)
+    if i >= cut:
+        return n_sim - 1
+    return min(n_sim - 1, int(round(i / cut * (n_sim - 1))))
+
+
 def _drive(page, url: str, n_video: int, n_sim: int, prefix: str, directory: Path,
            color: str | None, deform: float | None, *,
-           cover: bool, phi: float, radius: float, theta0: float, theta1: float) -> None:
+           finish_by: float, phi: float, radius: float, theta0: float, theta1: float) -> None:
     page.goto(url, wait_until="domcontentloaded")
     page.wait_for_function(
         "() => window.assemblerReplay && window.assemblerReplay.ready() "
@@ -178,12 +236,7 @@ def _drive(page, url: str, n_video: int, n_sim: int, prefix: str, directory: Pat
     )
     page.evaluate("() => window.assemblerReplay.setPlaying(false)")
     for i in range(n_video):
-        if cover:
-            # Last video frame of this segment is the last sim frame.
-            sim = round(i / max(1, n_video - 1) * (n_sim - 1))
-        else:
-            # Finish the build with 10% of the clip left, then hold.
-            sim = min(n_sim - 1, int(i / (0.9 * n_video) * n_sim))
+        sim = _sim_index(i, n_video, n_sim, finish_by)
         t = i / max(1, n_video - 1)
         theta = theta0 + (theta1 - theta0) * t
         page.evaluate(
@@ -243,7 +296,9 @@ def _encode(directory: Path, mp4: Path, gif: Path | None, gif_max: int) -> str:
     # A short excerpt of the bridge once the deck is colored, not the whole minute.
     gif.parent.mkdir(parents=True, exist_ok=True)
     palette = directory / "palette.png"
-    clip_start = TITLE_S + 22.0  # into the bridge, sag is on screen
+    # Finished span while deformation is still off. The exaggerated hold is
+    # the last 4 s of the bridge clip, and this excerpt ends before it.
+    clip_start = TITLE_S + 26.0
     _ffmpeg(
         [
             "ffmpeg", "-y", "-ss", f"{clip_start:.2f}", "-t", "5",
@@ -265,6 +320,70 @@ def _encode(directory: Path, mp4: Path, gif: Path | None, gif_max: int) -> str:
         gif.unlink()
         return note + f"; gif {size} bytes exceeded {gif_max}, not kept"
     return note + f"; gif {gif} ({size} bytes)"
+
+
+def _write_stills(page, base: str, facts: dict, artifact_dir: Path, frames: Path) -> None:
+    """Side views of the finished span, plus the one-robot README stills."""
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    side = (
+        f"{base}?log=runs/demo_bridge.json&frame=last&color=displacement"
+        f"&deform=0&theta={BRIDGE_THETA0}&phi={BRIDGE_PHI}&radius={BRIDGE_RADIUS}"
+    )
+    page.set_viewport_size({"width": WIDTH, "height": HEIGHT})
+    _open_log(page, side)
+    last = facts["bridge_frames"] - 1
+    _pose(
+        page, sim=last, color="displacement", deform=0,
+        theta=BRIDGE_THETA0, phi=BRIDGE_PHI, radius=BRIDGE_RADIUS,
+    )
+    page.screenshot(path=str(artifact_dir / "v02_bridge_side.png"))
+    _pose(
+        page, sim=last, color="displacement", deform=DEFORM_HOLD,
+        theta=BRIDGE_THETA0, phi=BRIDGE_PHI, radius=BRIDGE_RADIUS,
+    )
+    page.screenshot(path=str(artifact_dir / "v02_bridge_normalized.png"))
+
+    one = (
+        f"{base}?log=runs/bridge.json&frame=last&color=displacement"
+        f"&deform=0&theta={BRIDGE_THETA0}&phi={BRIDGE_PHI}&radius={BRIDGE_RADIUS}"
+    )
+    page.set_viewport_size({"width": 1400, "height": 900})
+    _open_log(page, one)
+    one_last = facts["one_frames"] - 1
+    _pose(
+        page, sim=one_last, color="displacement", deform=0,
+        theta=BRIDGE_THETA0, phi=BRIDGE_PHI, radius=BRIDGE_RADIUS,
+    )
+    still = ROOT / "docs" / "strain_bridge.png"
+    page.screenshot(path=str(still))
+
+    page.set_viewport_size({"width": 1100, "height": 700})
+    gif_dir = frames / "strain"
+    gif_dir.mkdir(exist_ok=True)
+    n = facts["one_frames"]
+    for i, frac in enumerate((0.15, 0.35, 0.55, 0.75, 1.0)):
+        sim = min(n - 1, int(round(frac * (n - 1))))
+        _pose(
+            page, sim=sim, color="displacement", deform=0,
+            theta=BRIDGE_THETA0 + 0.04 * i, phi=BRIDGE_PHI, radius=BRIDGE_RADIUS,
+        )
+        page.screenshot(path=str(gif_dir / f"st_{i:02d}.png"))
+    _ffmpeg(
+        [
+            "ffmpeg", "-y", "-framerate", "2",
+            "-i", str(gif_dir / "st_%02d.png"),
+            "-lavfi", "scale=1100:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer",
+            str(ROOT / "docs" / "strain_bridge.gif"),
+        ]
+    )
+    page.set_viewport_size({"width": WIDTH, "height": HEIGHT})
+    cuboct = f"{base}?log=runs/demo_cuboct.json&frame=last&shape=cuboctahedral&theta=0.9&phi=1.05&radius=8"
+    _open_log(page, cuboct)
+    _pose(
+        page, sim=facts["cuboct_frames"] - 1, color=None, deform=None,
+        theta=0.9, phi=1.05, radius=8,
+    )
+    page.screenshot(path=str(artifact_dir / "v02_cuboct.png"))
 
 
 def render(mp4: Path, gif: Path | None, gif_max: int) -> str:
@@ -308,47 +427,52 @@ def render(mp4: Path, gif: Path | None, gif_max: int) -> str:
                     [
                         "<span class='strong'>Two robots build a span.</span> Color is the spring-network displacement.",
                         f"This run: peak sag {peak:.0f} mg/k, finished {sag:.0f} mg/k at k = 1 (unfitted).",
-                        f"Display scale {DEFORM:.2f}× — exaggerated so the sag reads. Not a measured deflection.",
+                        "Blocks are drawn where they were placed. Deformation is off. Color is not a measured deflection.",
                     ],
                 ),
                 n_title,
             )
-            # Shear on the last 4 seconds of the bridge clip, displacement before that.
-            # Driven inside _drive via a single color; we split the call.
-            shear_at = n_bridge - int(4 * FPS)
+            # True geometry for most of the clip. The last 4 seconds turn the
+            # normalized exaggeration on, still on the finished span.
+            hold_at = n_bridge - int(4 * FPS)
             page.goto("about:blank")
             _drive(
                 page,
-                f"{base}?log=runs/demo_bridge.json&frame=0&color=displacement&deform={DEFORM}&theta=0.45",
-                shear_at,
+                (
+                    f"{base}?log=runs/demo_bridge.json&frame=0&color=displacement"
+                    f"&deform={DEFORM}&theta={BRIDGE_THETA0}&phi={BRIDGE_PHI}&radius={BRIDGE_RADIUS}"
+                ),
+                hold_at,
                 facts["bridge_frames"],
                 "br_",
                 frames,
                 color="displacement",
                 deform=DEFORM,
-                cover=True,
-                phi=1.35,
-                radius=11,
-                theta0=0.05,
-                theta1=0.55,
+                finish_by=0.72,
+                phi=BRIDGE_PHI,
+                radius=BRIDGE_RADIUS,
+                theta0=BRIDGE_THETA0,
+                theta1=BRIDGE_THETA1,
             )
-            # Continue the frame index. _drive always starts at 0, so write the
-            # shear hold into the same prefix with an offset by a second pass
-            # that names files from shear_at.
-            page.evaluate("() => window.assemblerReplay.setColor('shear')")
-            for i in range(shear_at, n_bridge):
-                sim = facts["bridge_frames"] - 1
+            for i in range(hold_at, n_bridge):
                 t = i / max(1, n_bridge - 1)
-                theta = 0.05 + 0.50 * t
+                theta = BRIDGE_THETA0 + (BRIDGE_THETA1 - BRIDGE_THETA0) * t
                 page.evaluate(
-                    """async ({sim, theta, deform}) => {
+                    """async ({sim, theta, deform, phi, radius}) => {
                         const v = window.assemblerReplay;
+                        v.setColor('displacement');
                         v.setDeform(deform);
-                        v.setOrbit(theta, 1.35, 11);
+                        v.setOrbit(theta, phi, radius);
                         v.setFrame(sim);
                         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
                     }""",
-                    {"sim": sim, "theta": theta, "deform": DEFORM},
+                    {
+                        "sim": facts["bridge_frames"] - 1,
+                        "theta": theta,
+                        "deform": DEFORM_HOLD,
+                        "phi": BRIDGE_PHI,
+                        "radius": BRIDGE_RADIUS,
+                    },
                 )
                 page.screenshot(path=str(frames / f"br_{i:04d}.png"))
             _shot_cards(
@@ -372,7 +496,7 @@ def render(mp4: Path, gif: Path | None, gif_max: int) -> str:
                 frames,
                 color=None,
                 deform=None,
-                cover=False,
+                finish_by=0.9,
                 phi=1.05,
                 radius=8,
                 theta0=0.4,
@@ -383,13 +507,14 @@ def render(mp4: Path, gif: Path | None, gif_max: int) -> str:
                 _card(
                     "Not a measurement",
                     [
-                        "Stiffness is the default k = 1. Colors are model units of mg/k.",
+                        "Stiffness is the default k = 1. Colors are model units of mg/k. The blocks were not moved by those numbers.",
                         "The print check (PLA cantilevers, n = 3 and n = 6) is docs/VALIDATION.md. The table is empty.",
                         "v0.2.0 stays untagged until that calibration.",
                     ],
                 ),
                 n_end,
             )
+            _write_stills(page, base, facts, mp4.parent, frames)
             browser.close()
     finally:
         httpd.shutdown()

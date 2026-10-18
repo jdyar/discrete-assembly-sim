@@ -530,7 +530,8 @@ def run_bridge(verbose: bool = True):
                 f"(model estimate, stiffness not fit)"
             )
         print("open replay_viewer.html and drop runs/bridge.json")
-        print("  color: displacement or joint strain; slider exaggerates sag")
+        print("  color: displacement or joint strain; geometry is as-built")
+        print("  exaggerate slider (off): longest arrow as a fraction of the pitch")
     return log, swarm
 
 

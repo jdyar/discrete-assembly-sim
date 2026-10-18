@@ -83,6 +83,10 @@ the cubic voxel grid is confirmed over strut-level cuboct geometry.
 
 ## Session log
 
+### 2026-10-18 — bridge picture: true geometry, normalized exaggeration
+
+The two-pier log was already a span (18 cells, deck at level 2, empty cell under midspan column 6, final occupancy equal to the blueprint). The viewer was multiplying the `mg/k` vector by the slider. At `k = 1` the midspan sample is 8, so 0.15×–0.50× dropped the deck by voxel-lengths into the piers and the ground. Default drawing is now the as-built cells, color only. The slider, off until moved, sets the longest arrow as a fraction of the voxel pitch (0.20 mild, cap 0.40) and the view is labeled exaggerated and normalized. Block size shrinks if a neighbor gap would close. Robots stand on the solid under their cell. `tests/test_structure_log.py` checks the air under the midspan deck and that the finished log matches the blueprint with no duplicate placements. 169 tests.
+
 ### 2026-10-18 — v0.2 milestone 6: write-up, validation plan, demo capture
 
 README is the front page: pitch, quickstart, strain-colored bridge, what v0.2 adds, gate numbers from `docs/stability_cost.csv` with n and min–max, and the open validation. Whitepaper §3.4 holds the sag assumptions and closed forms; §4.1 the precheck; §3.3 the cuboct solid; §6.6 the campaign; §9 points at `docs/VALIDATION.md`. That file specifies the PLA cantilevers (n = 3 and n = 6 free bays, 20 mm frames, 3 mm struts, clamp block, tip tab, Bambu P2S, 0.2 mm layers, 3 walls, 0–100 g in 10 g steps) and leaves every results cell PENDING. Self-weight tip ratio 3.5 vs Euler–Bernoulli 16. `CHANGELOG.md` marks v0.2.0 unreleased; package version stays 0.1.0. `scripts/render_demo.py` is the headless viewer capture. 168 tests. The hollow-roof 7.12 s figure stays a NOTES citation: it is the pre-precheck campaign, not a row in the current CSV.

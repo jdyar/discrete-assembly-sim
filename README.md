@@ -18,27 +18,27 @@ git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-asse
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m unittest                 # 168 tests
+python -m unittest                 # 169 tests
 python main.py bridge              # 1 robot, gate on, strain log -> runs/bridge.json
 python main.py cuboct              # 2×2×2 cuboctahedra -> runs/cuboct.json
 python main.py stability          # 312-trial gate campaign -> docs/stability_cost.csv
 ```
 
-Open `replay_viewer.html` and drop `runs/bridge.json` on it (or serve the repo root with `python -m http.server` and it loads `runs/latest.json`). Displacement color, a scale slider, and a marker on the worst-sag cell appear only when the log has samples. `pip install git+https://github.com/jdyar/discrete-assembly-sim.git` then `import sim` prints **0.1.0** until the tag.
+Open `replay_viewer.html` and drop `runs/bridge.json` on it (or serve the repo root with `python -m http.server` and it loads `runs/latest.json`). Displacement color and a marker on the worst-sag cell appear only when the log has samples. The blocks are drawn on the cells where they were placed. An exaggerate slider, off until you move it, redraws the longest arrow as a fraction of the voxel pitch. `pip install git+https://github.com/jdyar/discrete-assembly-sim.git` then `import sim` prints **0.1.0** until the tag.
 
-A ~60 s headless capture of a **two-robot** bridge (strain color, exaggerated display scale) and a cuboct block is `python scripts/render_demo.py`. That script needs Playwright, ffmpeg, and Chrome; it is not part of `requirements.txt`. The mp4 is written under the artifacts directory, not committed.
+A ~60 s headless capture of a **two-robot** bridge (strain color, true geometry, side view of the span) and a cuboct block is `python scripts/render_demo.py`. That script needs Playwright, ffmpeg, and Chrome; it is not part of `requirements.txt`. The mp4 is written under the artifacts directory, not committed.
 
 ## Strain-colored bridge
 
-![Two-pier bridge while it is being built, colored by the spring-network displacement. Unfitted k = 1. The scale on the still is 0.15× so the deck stays readable. The colorbar is model units of mg/k, not a measurement.](docs/strain_bridge.gif)
+![Two-pier bridge while it is being built, colored by the spring-network displacement. Unfitted k = 1. The blocks sit on the cells where they were placed: two piers and a deck in the air between them. The colorbar is model units of mg/k, not a measurement.](docs/strain_bridge.gif)
 
-The still of the finished deck, same run, worst-sag cell in a white cage: ![Finished bridge, displacement color, scale 0.15×](docs/strain_bridge.png)
+The still of the finished deck, same run, worst-sag cell in a white cage: ![Finished bridge from the side, displacement color, true geometry](docs/strain_bridge.png)
 
-A five-second excerpt of the two-robot recording (`scripts/render_demo.py`) is below. The display scale there is 0.50× and the camera is a side view, so the midspan droop is the point of the picture. Same unfitted `k = 1`. The minute-long cut, with title cards and the cuboct block, is an artifact of that script and is not committed.
+A five-second excerpt of the two-robot recording (`scripts/render_demo.py`) is below. The camera is a side view of the finished span, and deformation is off, so the gap under the deck is the point of the picture. Same unfitted `k = 1`. The minute-long cut, with title cards and the cuboct block, is an artifact of that script and is not committed.
 
-![Two robots, displacement color, display scale 0.50×. Model units, not a measurement.](docs/demo_bridge.gif)
+![Two robots, finished span from the side, displacement color, true geometry. Model units, not a measurement.](docs/demo_bridge.gif)
 
-That run is `python main.py bridge`: one robot, `max_cantilever` 3, `k = mass = g = 1`. Finished midspan sag is 8 in units of `mass·g/k`. The slider's 1× draws the model displacement in voxel lengths. Above 1× exaggerates further. At the default stiffness, 1× is already several voxel-lengths, which is why the pictures are at 0.15×. Joint-strain mode colors each voxel by its largest incident face joint (axial, tension positive, or shear). Nothing in the picture has been fit to a printed specimen.
+That run is `python main.py bridge`: one robot, `max_cantilever` 3, `k = mass = g = 1`. Finished midspan sag is 8 in units of `mass·g/k`. Those units are the color, not a shift of the blocks. With `k = 1` the raw vector is several voxel-lengths, and drawing it would drop the deck into the piers and the ground. The exaggerate slider stays at 0 until you move it. At 0.20 the longest arrow on screen is a fifth of a voxel pitch; the slider stops at 0.40. The label on that view says the picture is exaggerated and normalized. Joint-strain mode colors each voxel by its largest incident face joint (axial, tension positive, or shear). Nothing in the picture has been fit to a printed specimen.
 
 ## What v0.2 adds
 
@@ -46,12 +46,12 @@ The gate and the sag solver stay out of the planner unless a caller passes a `St
 
 - **Stability gate** (`sim/stability.py`). Every voxel must face-connect to a column on the base. Horizontal overhang is capped by `max_cantilever`. A hanging block inherits the beam's overhang: fasteners are assumed to take tension, not masonry. A refusal uses the existing kickback. Another robot's unplaced deed is not a support.
 - **Sag model and closed forms.** Voxels are nodes, one lumped axial/shear spring per face, `Ku = mg`. A one-voxel-wide cantilever of `n` free bays has tip sag `(mg / k_shear) · n(n+1)/2`. A tower shortens by the same expression with `k_axial`. Tests check the solver against those formulas.
-- **Strain viewer.** Opt-in `StructureLog` samples displacement and a joint-strain proxy (relative displacement over pitch) onto the run log. The viewer colors, exaggerates, and marks `worst_sag_cell`. Older logs still play.
+- **Strain viewer.** Opt-in `StructureLog` samples displacement and a joint-strain proxy (relative displacement over pitch) onto the run log. The viewer colors by that sample and marks `worst_sag_cell`, drawing the as-built cells. Exaggeration is optional and normalized to a fraction of the pitch. Older logs still play.
 - **Gate campaign.** `python main.py stability`, 312 trials, raw rows in [`docs/stability_cost.csv`](docs/stability_cost.csv). Summary in the next section. `k = 1`.
 - **Cuboctahedral voxels** (`sim/cuboct.py`, `python main.py cuboct`). Optional. Same six face-neighbors and the same lumped springs, so the closed forms still hold. Twelve vertices at the edge midpoints of the bounding cube, and four joint sites at the corners of the shared square. The cubic solid stays the default. Geometry only: not a calibrated model of the ARMADAS voxel ([Gregg et al. 2024](https://doi.org/10.1126/scirobotics.adi2746)).
 - **Stability precheck.** Before the order search, overhang in the *finished* structure lower-bounds every prefix. A blueprint that already fails the cantilever limit is rejected without spending the node budget. The screen does not reject a blueprint the search could return.
 
-168 tests cover the traps, the 3D repair loop, fuzz, the examples, the screen, the precheck, the strain log, a smoke run of the campaign, and the cuboct solid.
+169 tests cover the traps, the 3D repair loop, fuzz, the examples, the screen, the precheck, the strain log, the bridge span, a smoke run of the campaign, and the cuboct solid.
 
 ## Results
 
