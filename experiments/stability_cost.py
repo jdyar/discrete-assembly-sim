@@ -171,13 +171,19 @@ def build_cantilever(length: int) -> tuple[World3D, tuple[int, int, int]]:
 def build_fuzz(seed: int) -> tuple[World3D, tuple[int, int, int], str, str]:
     """One small random shape. Returns world, depot, blueprint name, detail.
 
-    Kinds stay inside the size where a rejection proof fits in
-    :data:`MAX_NODES`. The hollow box is a named shape, not a fuzz draw:
-    its limit-0 search is the slow undecided case, and repeating it here
-    would not add a new fact.
+    The four campaign seeds are one wall, one bridge, one cantilever, and
+    one ledge; the seed draws the dimensions. Kinds stay inside the size
+    where a rejection proof fits in :data:`MAX_NODES`. The hollow box is
+    a named shape, not a fuzz draw: its limit-0 search is the slow
+    undecided case, and repeating it here would not add a new fact.
     """
     rng = random.Random(seed)
-    kind = ("wall", "bridge", "cantilever", "ledge")[rng.randrange(4)]
+    # The published seeds are one of each kind. A seed outside that list
+    # still draws a kind, so the helper stays usable on its own.
+    if seed in FUZZ_SEEDS:
+        kind = ("wall", "bridge", "cantilever", "ledge")[list(FUZZ_SEEDS).index(seed)]
+    else:
+        kind = ("wall", "bridge", "cantilever", "ledge")[rng.randrange(4)]
     if kind == "wall":
         width = 2 + rng.randrange(3)  # 2..4
         height = 2 + rng.randrange(2)  # 2..3
@@ -638,6 +644,15 @@ def summarize(rows: list[dict]) -> str:
                 f"final_sag[{_spread(_nums(done, 'final_sag'))}] "
                 f"sag_errors[{_spread(_nums(done, 'sag_errors'))}]"
             )
+            for n_robots in sorted({int(row["n_robots"]) for row in done}):
+                subset = [row for row in done if int(row["n_robots"]) == n_robots]
+                lines.append(
+                    f"      N={n_robots} "
+                    f"makespan[{_spread(_nums(subset, 'makespan'))}] "
+                    f"kickbacks[{_spread(_nums(subset, 'kickbacks'))}] "
+                    f"idle[{_spread(_nums(subset, 'idle_robot_ticks'))}] "
+                    f"peak_sag[{_spread(_nums(subset, 'peak_sag'))}]"
+                )
         incomplete = [row for row in group if row["status"] == "feasible" and not _completed(row)]
         for row in incomplete:
             lines.append(
@@ -828,7 +843,7 @@ def _plot_feasibility(rows: list[dict], path: Path) -> Path:
             decided = feasible + infeasible
             if decided == 0:
                 color = "#e5e7eb"
-                text = f"undecided\n{undecided}/{len(cell)}"
+                text = f"{undecided} und."
             else:
                 share = feasible / decided
                 # Rejected cells are light red, proved-feasible cells are blue.
@@ -839,7 +854,7 @@ def _plot_feasibility(rows: list[dict], path: Path) -> Path:
                 )
                 text = f"{feasible}/{decided}"
                 if undecided:
-                    text += f"\n+{undecided} und."
+                    text = f"{feasible}/{decided}\n+{undecided} und."
             ax.add_patch(
                 Rectangle((x, y), 1, 1, facecolor=color, edgecolor="white", linewidth=2)
             )

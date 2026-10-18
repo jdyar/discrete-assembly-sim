@@ -83,6 +83,26 @@ the cubic voxel grid is confirmed over strut-level cuboct geometry.
 
 ## Session log
 
+### 2026-10-18 — v0.2 milestone 3: cost of the stability gate
+
+`experiments/stability_cost.py`, `python main.py stability`. 312 trials,
+Python 3.12.3, k = 1 (uncalibrated model units). Named shapes × seeds
+{0, 1, 2} × N ∈ {1, 2} × {off, 0, 1, 2, 3, none}; fuzz seeds 1001–1004
+(one wall, one span-6 bridge, one cantilever, one ledge) × start seeds
+{0, 1}. Search cap 200 nodes; a cap hit is undecided.
+
+Span-5 bridge: gate-off peak sag median 15 (range 10–15, four trials at
+15), finished sag 6. Limit 2, the tightest feasible setting, peaks at 6
+on all 6 trials. N = 1 makespan 78–85 → 104–135; N = 2 makespan 50–56 →
+69–112, kickbacks 4–26, idle robot-ticks 24–80. Limits 0 and 1 proved
+infeasible, 6/6. Span-6: gate-off peak median 21 (15–21) → 10 at limit
+3, finished sag 8. Cantilever 4 peaks at 15 whenever it builds, is
+proved infeasible at limits 0–3, and drops from 5 singular sag samples
+per gate-off trial to 0 with the connectivity rule on. Hollow 3×3×2 at
+limit 0: finished structure fails the screen, order search undecided
+6/6 (median 7.12 s). Successful searches stay ~0.03 s. 202 feasible,
+104 infeasible, 6 undecided. Charts and CSV in docs/. 142 tests.
+
 ### 2026-10-17 — v0.2 milestone 2: strain in the run log and the viewer
 
 Opt-in only. `StructureLog` on a `RunLog` samples `estimate_sag` when the

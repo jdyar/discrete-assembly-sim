@@ -103,6 +103,8 @@ class TestCampaignGrid(unittest.TestCase):
             self.assertEqual(int(first[0].blueprint_count), int(second[0].blueprint_count))
             self.assertLessEqual(int(first[0].blueprint_count), 12)
             self.assertGreaterEqual(int(first[0].blueprint_count), 4)
+        details = {build_fuzz(seed)[3].split()[0] for seed in FUZZ_SEEDS}
+        self.assertEqual(details, {"wall", "bridge", "cantilever", "ledge"})
         jobs = list(iter_fuzz_jobs())
         self.assertEqual(len(jobs), len(FUZZ_SEEDS) * 6 * 2 * len((0, 1)))
 
