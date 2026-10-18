@@ -11,20 +11,30 @@ unless a StabilityPolicy is passed.
 
 from __future__ import annotations
 
+import random
 import unittest
 
 from main import DEPOT, build_world
 from sim.choreographer import plan_task
 from sim.geometry import SquareLattice2D
 from sim.geometry3d import CubicLattice3D
-from sim.planner import _approaches_for, plan_build_order, validate_plan
+from sim.planner import (
+    SearchBudgetExceeded,
+    _approaches_for,
+    plan_build_order,
+    stability_precheck,
+    validate_plan,
+)
 from sim.reservations import ReservationTable
 from sim.stability import (
+    StabilityPolicy,
     assess_stability,
     axial_tower_compression,
     estimate_sag,
     is_stable,
+    necessary_stability_precheck,
     occupied_voxels,
+    overhang_lower_bounds,
     path_chain_deflection_at,
     shear_cantilever_tip_sag,
 )
@@ -432,6 +442,306 @@ def _cantilever_world() -> tuple[World, tuple[int, int]]:
     for cell in ((5, 6), (4, 6), (4, 5), (4, 4)):
         world.blueprint[cell] = True
     return world, (5, 0)
+
+
+def _face_neighbors(cell):
+    coords = list(cell)
+    for axis in range(len(coords)):
+        for delta in (-1, 1):
+            coords[axis] += delta
+            yield tuple(coords)
+            coords[axis] -= delta
+
+
+def _greedy_stable_order(cells, policy):
+    """Prefix-stable order, or None if the finished set itself fails.
+
+    A return of None on a set that passes :func:`is_stable` would mean
+    the overhang lower bound is not a sufficient stability condition.
+    The precheck relies on that sufficiency only as an explanation; the
+    soundness test is the one-directional check against the planner.
+    """
+    if not is_stable(cells, policy):
+        return None
+    placed: set = set()
+    remaining = set(cells)
+    order = []
+    while remaining:
+        nxt = None
+        for cell in sorted(remaining):
+            if is_stable(placed | {cell}, policy):
+                nxt = cell
+                break
+        if nxt is None:
+            return None
+        remaining.remove(nxt)
+        placed.add(nxt)
+        order.append(nxt)
+    return order
+
+
+class TestNecessaryPrecheck(unittest.TestCase):
+    """The finished-structure screen is a proof, not a search heuristic.
+
+    Overhang in the full set is a lower bound on overhang in every
+    subset. Rejecting on that bound cannot throw away a plan whose
+    finished prefix passed ``is_stable``.
+    """
+
+    def test_lower_bound_is_monotone_under_deletion(self) -> None:
+        rng = random.Random(0)
+        policy = StabilityPolicy(0, 1, ground_plane=0, max_cantilever=1)
+        for _trial in range(40):
+            cells = []
+            n = 1 + rng.randrange(8)
+            while len(cells) < n:
+                cell = (1 + rng.randrange(3), rng.randrange(4), rng.randrange(4))
+                if cell not in cells:
+                    cells.append(cell)
+            bounds = overhang_lower_bounds(cells, policy)
+            self.assertEqual(set(bounds), set(cells))
+            for _subset in range(6):
+                chosen = [c for c in cells if rng.randrange(2)]
+                if not chosen:
+                    continue
+                sub_bounds = overhang_lower_bounds(chosen, policy)
+                for cell in chosen:
+                    full = bounds[cell]
+                    part = sub_bounds[cell]
+                    if full is None:
+                        self.assertIsNone(part)
+                    elif part is None:
+                        continue
+                    else:
+                        self.assertGreaterEqual(part, full)
+
+    def test_floating_voxel_has_no_finite_lower_bound(self) -> None:
+        # Nothing under it and nothing beside it. Limit does not matter:
+        # there is no column to be a finite number of steps from.
+        cells = [(3, 1, 1)]
+        policy = StabilityPolicy(0, 1, ground_plane=0, max_cantilever=10)
+        bounds = overhang_lower_bounds(cells, policy)
+        self.assertIsNone(bounds[(3, 1, 1)])
+        screen = necessary_stability_precheck(cells, policy)
+        self.assertTrue(screen.rejected)
+        self.assertEqual(screen.cell, (3, 1, 1))
+        self.assertIsNone(screen.lower_bound)
+        self.assertIn("no finite overhang lower bound", screen.reason)
+
+    def test_span_lower_bound_rejects_only_past_the_limit(self) -> None:
+        # Column on the plate, then two steps out at the next level. The
+        # first course of an infinite ground plane would be planted, so
+        # the arm has to sit above that course. Tip overhang is 2.
+        # Limit 1 is a proof; limit 2 is not a rejection.
+        cells = [(1, 0, 0), (2, 0, 0), (2, 0, 1), (2, 0, 2)]
+        tight = StabilityPolicy(0, 1, ground_plane=0, max_cantilever=1)
+        loose = StabilityPolicy(0, 1, ground_plane=0, max_cantilever=2)
+        screen = necessary_stability_precheck(cells, tight)
+        self.assertTrue(screen.rejected)
+        self.assertEqual(screen.cell, (2, 0, 2))
+        self.assertEqual(screen.lower_bound, 2)
+        self.assertIn("overhang lower bound 2", screen.reason)
+        self.assertIn("max_cantilever 1", screen.reason)
+        allowed = necessary_stability_precheck(cells, loose)
+        self.assertFalse(allowed.rejected)
+        self.assertEqual(allowed.lower_bound, 2)
+        self.assertIsNotNone(_greedy_stable_order(cells, loose))
+        self.assertIsNone(_greedy_stable_order(cells, tight))
+
+    def test_hollow_roof_center_bound_is_one(self) -> None:
+        # 3×3 footprint, hollow center on level 1, full roof on level 2.
+        # Same combinatorics as the campaign box, on a smaller index set.
+        cells = [
+            (level, row, col)
+            for level in (1, 2)
+            for row in range(3)
+            for col in range(3)
+            if not (level == 1 and row == 1 and col == 1)
+        ]
+        self.assertEqual(len(cells), 17)
+        policy0 = StabilityPolicy(0, 1, ground_plane=0, max_cantilever=0)
+        bounds = overhang_lower_bounds(cells, policy0)
+        self.assertEqual(bounds[(2, 1, 1)], 1)
+        self.assertTrue(all(v == 0 for c, v in bounds.items() if c != (2, 1, 1)))
+        screen = necessary_stability_precheck(cells, policy0)
+        self.assertTrue(screen.rejected)
+        self.assertEqual(screen.cell, (2, 1, 1))
+        self.assertEqual(screen.lower_bound, 1)
+        for limit in (1, 2):
+            policy = StabilityPolicy(0, 1, ground_plane=0, max_cantilever=limit)
+            passed = necessary_stability_precheck(cells, policy)
+            self.assertFalse(passed.rejected, passed.reason)
+            self.assertEqual(passed.lower_bound, 1)
+            self.assertIsNotNone(_greedy_stable_order(cells, policy))
+
+    def test_gate_off_does_not_reject_a_floating_blueprint(self) -> None:
+        world = World(rows=7, cols=8)
+        world.blueprint[4, 3] = True
+        depot = (5, 0)
+        self.assertFalse(stability_precheck(world, None).rejected)
+        self.assertEqual(stability_precheck(world, None).reason, "stability gate is off")
+        plan = plan_build_order(world, depot)
+        self.assertIsNotNone(plan)
+        policy = SquareLattice2D(world).stability_policy(max_cantilever=10)
+        screen = stability_precheck(world, policy)
+        self.assertTrue(screen.rejected)
+        self.assertIsNone(screen.lower_bound)
+        self.assertIsNone(plan_build_order(world, depot, stability=policy, max_nodes=1))
+
+    def test_empty_remainder_is_still_an_empty_plan(self) -> None:
+        # Nothing left to place. The replan contract stays [], even if a
+        # direct precheck of the occupancy would complain.
+        world = World(rows=7, cols=8)
+        world.place_voxel((4, 3))
+        policy = SquareLattice2D(world).stability_policy(max_cantilever=0)
+        self.assertTrue(stability_precheck(world, policy).rejected)
+        self.assertEqual(plan_build_order(world, (5, 0), stability=policy), [])
+
+    def test_2d_cantilever_screen_matches_the_search(self) -> None:
+        world, depot = _cantilever_world()
+        for limit, feasible in ((0, False), (1, False), (2, True)):
+            policy = SquareLattice2D(world).stability_policy(max_cantilever=limit)
+            screen = stability_precheck(world, policy)
+            self.assertEqual(screen.rejected, not feasible, screen.reason)
+            screened = plan_build_order(world, depot, stability=policy, max_nodes=1000)
+            raw = plan_build_order(
+                world, depot, stability=policy, max_nodes=1000, precheck=False
+            )
+            if feasible:
+                self.assertIsNotNone(screened)
+                self.assertIsNotNone(raw)
+                self.assertFalse(screen.rejected)
+            else:
+                self.assertIsNone(screened)
+                self.assertIsNone(raw)
+                self.assertTrue(screen.rejected)
+            self.assertEqual(world.built_count, 0)
+
+    def test_small_fuzz_never_rejects_a_blueprint_the_search_can_build(self) -> None:
+        saw_plan = False
+        saw_rejection = False
+        for dim, cases in _fuzz_cases():
+            for seed, cells, limit, world, depot, factory, policy in cases:
+                with self.subTest(dim=dim, seed=seed, n=len(cells), limit=limit):
+                    screen = stability_precheck(world, policy)
+                    final = [
+                        tuple(int(v) for v in nd)
+                        for nd in zip(*world.blueprint.nonzero())
+                    ]
+                    self.assertEqual(screen.rejected, not is_stable(final, policy))
+                    greedy = _greedy_stable_order(final, policy)
+                    if screen.rejected:
+                        self.assertIsNone(greedy)
+                    else:
+                        self.assertIsNotNone(greedy)
+                    try:
+                        raw = plan_build_order(
+                            world,
+                            depot,
+                            factory,
+                            max_nodes=8_000,
+                            stability=policy,
+                            precheck=False,
+                        )
+                    except SearchBudgetExceeded as exc:
+                        self.fail(f"unscreened search did not finish: {exc}")
+                    screened = plan_build_order(
+                        world,
+                        depot,
+                        factory,
+                        max_nodes=8_000,
+                        stability=policy,
+                        precheck=True,
+                    )
+                    if not screen.rejected:
+                        self.assertEqual(
+                            None if screened is None else [task.cell for task in screened],
+                            None if raw is None else [task.cell for task in raw],
+                        )
+                    if raw is not None:
+                        saw_plan = True
+                        self.assertIsNotNone(screened)
+                        self.assertFalse(screen.rejected, screen.reason)
+                        ok, why = validate_plan(
+                            world, screened, depot, factory, stability=policy
+                        )
+                        self.assertTrue(ok, why)
+                    if screen.rejected:
+                        saw_rejection = True
+                        self.assertIsNone(raw)
+                        self.assertIsNone(screened)
+                        self.assertTrue(
+                            screen.lower_bound is None or screen.lower_bound > limit
+                        )
+                    # A screened rejection must not depend on the budget.
+                    if screen.rejected:
+                        self.assertIsNone(
+                            plan_build_order(
+                                world,
+                                depot,
+                                factory,
+                                max_nodes=1,
+                                stability=policy,
+                            )
+                        )
+        self.assertTrue(saw_plan)
+        self.assertTrue(saw_rejection)
+
+
+def _in_box(cell, bounds) -> bool:
+    return all(lo <= value < hi for value, (lo, hi) in zip(cell, bounds))
+
+
+def _grow(rng, seed_cell, n, bounds):
+    cells = [seed_cell]
+    guard = 0
+    while len(cells) < n and guard < 1000:
+        guard += 1
+        host = cells[rng.randrange(len(cells))]
+        options = [
+            nb
+            for nb in _face_neighbors(host)
+            if _in_box(nb, bounds) and nb not in cells
+        ]
+        if not options:
+            continue
+        cells.append(options[rng.randrange(len(options))])
+    return cells
+
+
+def _fuzz_cases():
+    """Small connected blueprints in 2D and 3D, several cantilever limits.
+
+    Sizes stay at or below 6 voxels so the unscreened search exhausts
+    (the dead-end memo visits each subset at most once). ``randrange``
+    draws the cells; ``random.sample`` is avoided because it is not
+    stable across the Python versions this repo tests.
+    """
+    out = []
+    rng = random.Random(20261018)
+    cases3 = []
+    for seed in range(8):
+        for n in (4, 5, 6):
+            cells = _grow(rng, (1, 1, 2), n, ((1, 4), (1, 4), (2, 6)))
+            for limit in (0, 1, 2):
+                world = World3D(5, 5, 7)
+                for cell in cells:
+                    world.blueprint[cell] = True
+                policy = CubicLattice3D(world).stability_policy(max_cantilever=limit)
+                cases3.append((seed, cells, limit, world, (1, 0, 0), CubicLattice3D, policy))
+    out.append((3, cases3))
+    cases2 = []
+    for seed in range(6):
+        for n in (4, 5, 6):
+            cells = _grow(rng, (6, 2), n, ((3, 7), (2, 7)))
+            for limit in (0, 1, 2):
+                world = World(rows=8, cols=8)
+                for cell in cells:
+                    world.blueprint[cell] = True
+                policy = SquareLattice2D(world).stability_policy(max_cantilever=limit)
+                cases2.append((seed, cells, limit, world, (6, 0), SquareLattice2D, policy))
+    out.append((2, cases2))
+    return out
 
 
 def _plan_placement(world, depot, target, stability):

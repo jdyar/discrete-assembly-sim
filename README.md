@@ -50,7 +50,7 @@ python main.py swarm 2        # 2 robots, 2D wall (the degenerate case, kept hon
 python main.py                # single robot, defects + repair (the yield demo)
 python main.py yield          # the yield-vs-p experiment -> runs/yield_vs_p.png
 
-python -m unittest            # 158 tests: traps, 3D repair, fuzz, examples, stability, strain log, cuboct
+python -m unittest            # 168 tests: traps, 3D repair, fuzz, examples, stability, strain log, cuboct
 ```
 
 **Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run. A log written with strain sampling (`python main.py bridge` → `runs/bridge.json`) adds a color mode for displacement or joint strain, a colorbar, a scale slider, and a marker on the worst-sag voxel. Logs without that data play exactly as before. On a 3D log the voxel menu switches cubic boxes and cuboctahedra. `python main.py cuboct` sets `meta.voxel_shape` so the viewer opens on cuboctahedra; a log that omits the key, including every older log, stays cubic. The menu is a drawing toggle. It does not change the cell graph, and it is not a measurement of ARMADAS hardware.
@@ -91,11 +91,11 @@ Reproduce with `python main.py yield3d`. The repair experiment also caught a gen
 
 The stability gate is off unless you pass a `StabilityPolicy`. `python main.py stability` is the measurement of turning it on: 312 trials, gate off against `max_cantilever` 0, 1, 2, 3, and none. Stiffness is the default **k = 1**. Every sag number below is `estimate_sag` in model units of `mass·g/k`. It has not been fit to a printed specimen; that calibration is still waiting on specimen tests.
 
-Named cells are 3 start seeds (0, 1, 2) × 1 and 2 robots, so n = 6. A search that hits the 200-node cap is undecided, not a rejection. Points on the charts are trials; the bar is the median. The full spread, including idle robot-ticks and planning seconds, is in [WHITEPAPER.md](WHITEPAPER.md) §6.6 and `docs/stability_cost.csv`.
+Named cells are 3 start seeds (0, 1, 2) × 1 and 2 robots, so n = 6. A search that hits the 200-node cap is undecided, not a rejection. A finished structure past the cantilever limit is a rejection from the precheck, and the order search does not run. This run has no undecided trials: 202 proved feasible, 110 proved infeasible. Points on the charts are trials; the bar is the median. The full spread, including idle robot-ticks and planning seconds, is in [WHITEPAPER.md](WHITEPAPER.md) §6.6 and `docs/stability_cost.csv`.
 
 ![Peak sag during construction. The span-5 bridge drops from a median of 15 to 6 at cantilever limit 2, which is the finished sag. k = 1, uncalibrated.](docs/stability_peak_sag.png)
 
-On the span-5 bridge the finished sag is 6. With the gate off, the peak during the build is 15 on four of the six trials and 10 on two. Limit 2 is the tightest setting that still accepts the deck, and all six trials then peak at 6. Limit 3 leaves a peak of 10. Limits 0 and 1 are proved infeasible, 6/6. The span-6 bridge repeats it one step looser: gate-off peak median 21 (range 15–21), limit 3 peaks at 10 on all six, finished sag 8, and limits 0–2 are proved infeasible. A pure cantilever keeps the peak it had with the gate off, once the limit allows the arm: length 3 stays at 10, length 4 stays at 15, and length 4 is rejected at every finite limit. Every gate-off length-4 trial logged 5 singular sag samples; with the connectivity rule on, that count is 0. The wall peaks at 3 in every trial. The hollow 3×3×2 roof fails as a finished structure at limit 0, and the order search is undecided on all 6 trials inside 200 nodes (median 7.12 s, range 7.09–7.15). At limits that allow the roof, peak sag matches the gate-off runs.
+On the span-5 bridge the finished sag is 6. With the gate off, the peak during the build is 15 on four of the six trials and 10 on two. Limit 2 is the tightest setting that still accepts the deck, and all six trials then peak at 6. Limit 3 leaves a peak of 10. Limits 0 and 1 are proved infeasible, 6/6. The span-6 bridge repeats it one step looser: gate-off peak median 21 (range 15–21), limit 3 peaks at 10 on all six, finished sag 8, and limits 0–2 are proved infeasible. A pure cantilever keeps the peak it had with the gate off, once the limit allows the arm: length 3 stays at 10, length 4 stays at 15, and length 4 is rejected at every finite limit. Every gate-off length-4 trial logged 5 singular sag samples; with the connectivity rule on, that count is 0. The wall peaks at 3 in every trial. The hollow 3×3×2 roof is proved infeasible at limit 0, 6/6: the center cell has no column under it and its overhang lower bound is 1, so the precheck rejects it (median 0.096 ms, range 0.088–0.120 ms). Limits 1 and 2 allow that bound. At every limit that allows the roof, peak sag matches the gate-off runs.
 
 ![Ticks to complete. One robot is the light series, two robots the dark series.](docs/stability_makespan.png)
 
@@ -136,7 +136,7 @@ sim/
   robot.py              # single-robot state machine (the Slice 1-2 build)
   metrics.py            # replayable JSON run logs (v1/v2/v3) + charts
   render.py             # ASCII + matplotlib animation
-tests/                  # 158 tests incl. spec-first adversarial trap fixtures
+tests/                  # 168 tests incl. spec-first adversarial trap fixtures
 replay_viewer.html      # zero-build Three.js replay viewer (2D + 3D)
 docs/DESIGN.md          # binding architecture rules + provenance per stage
 ```

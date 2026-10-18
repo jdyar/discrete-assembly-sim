@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -32,6 +33,14 @@ from experiments.stability_cost import (
     load_rows,
     run_smoke,
 )
+from sim.geometry3d import CubicLattice3D
+from sim.planner import (
+    SearchBudgetExceeded,
+    plan_build_order,
+    stability_precheck,
+    validate_plan,
+)
+from sim.stability import is_stable, occupied_voxels
 
 
 class TestShapeScreens(unittest.TestCase):
@@ -69,6 +78,70 @@ class TestShapeScreens(unittest.TestCase):
         arm4, _depot = build_cantilever(4)
         self.assertFalse(finished_stable(arm4, 3))
         self.assertTrue(finished_stable(arm4, None))
+
+
+class TestHollowRoofPrecheck(unittest.TestCase):
+    """The 3×3×2 roof is a span of 1, not an open search problem.
+
+    The center roof cell has no column under it. Its overhang in the
+    finished structure is 1, which is a lower bound on every prefix.
+    Limit 0 is therefore infeasible. Limits 1 and 2 allow that bound,
+    and the search still finds an order.
+    """
+
+    def _policy(self, world, limit):
+        return CubicLattice3D(world).stability_policy(max_cantilever=limit)
+
+    def test_limit_0_is_proved_infeasible_without_the_node_budget(self):
+        world, depot = build_hollow_box()
+        policy = self._policy(world, 0)
+        screen = stability_precheck(world, policy)
+        self.assertTrue(screen.rejected)
+        self.assertEqual(screen.cell, (2, 3, 4))
+        self.assertEqual(screen.lower_bound, 1)
+        self.assertIn("overhang lower bound 1", screen.reason)
+        self.assertIn("max_cantilever 0", screen.reason)
+
+        started = time.perf_counter()
+        plan = plan_build_order(
+            world, depot, CubicLattice3D, max_nodes=1, stability=policy
+        )
+        elapsed = time.perf_counter() - started
+        self.assertIsNone(plan)
+        self.assertLess(elapsed, 0.25)
+        self.assertEqual(world.built_count, 0)
+        # The unscreened search does not have a proof at a tiny budget.
+        # That is the old undecided result; the precheck is what closes it.
+        with self.assertRaises(SearchBudgetExceeded):
+            plan_build_order(
+                world,
+                depot,
+                CubicLattice3D,
+                max_nodes=8,
+                stability=policy,
+                precheck=False,
+            )
+
+    def test_limits_1_and_2_still_have_a_stable_order(self):
+        for limit in (1, 2):
+            world, depot = build_hollow_box()
+            policy = self._policy(world, limit)
+            screen = stability_precheck(world, policy)
+            self.assertFalse(screen.rejected, screen.reason)
+            self.assertEqual(screen.cell, (2, 3, 4))
+            self.assertEqual(screen.lower_bound, 1)
+            plan = plan_build_order(
+                world, depot, CubicLattice3D, stability=policy
+            )
+            self.assertIsNotNone(plan)
+            ok, why = validate_plan(
+                world, plan, depot, CubicLattice3D, stability=policy
+            )
+            self.assertTrue(ok, why)
+            scratch = world.copy()
+            for task in plan:
+                scratch.place_voxel(task.cell)
+                self.assertTrue(is_stable(occupied_voxels(scratch), policy))
 
 
 class TestCampaignGrid(unittest.TestCase):

@@ -83,6 +83,17 @@ the cubic voxel grid is confirmed over strut-level cuboct geometry.
 
 ## Session log
 
+### 2026-10-18 — stability precheck: the hollow roof is infeasible at limit 0
+
+The 3×3×2 roof center `(2, 3, 4)` has no column under it. Finished
+overhang is 1, which lower-bounds every prefix, so `max_cantilever = 0`
+cannot have a stable order. `necessary_stability_precheck` rejects that
+before search. Limits 1 and 2 allow the bound and still plan. Campaign
+re-run (Python 3.12.3): 202 feasible, 110 infeasible, 0 undecided.
+Hollow limit 0 is 6/6 infeasible, median 0.096 ms (was undecided,
+median 7.12 s). Build metrics other than that status are unchanged.
+168 tests, with the cuboctahedral solid from milestone 4.
+
 ### 2026-10-18 — v0.2 milestone 4: optional cuboctahedral solid
 
 `CuboctahedralLattice3D` in `sim/cuboct.py`, behind the existing

@@ -70,8 +70,13 @@ The sag estimate is not a gate. It is a dense `Ku = mg` solve (voxels
 as nodes, face joints as axial and shear springs) that reports the
 worst displacement of a partial build. It is not run inside the search.
 Default-off is load-bearing: `max_cantilever=0` rejects spans, including
-a hollow-box roof. §6.1–§6.5 of the whitepaper were not run with the
-gate on. §6.6 is the measurement (`python main.py stability`), and the
+a hollow-box roof. The planner applies that screen to the finished
+blueprint before it searches (`stability_precheck`): a voxel's overhang
+there is a lower bound on every prefix, so a roof cell with no column
+and a bound past the limit is infeasible without expanding the order
+tree. The check does not reject a blueprint whose finished structure
+passes. §6.1–§6.5 of the whitepaper were not run with the gate on.
+§6.6 is the measurement (`python main.py stability`), and the
 stiffness in that run is the unfitted default k = 1.
 
 The same estimate can be written into the run log. A `StructureLog`
