@@ -16,7 +16,12 @@ purpose:
 
 The screen is the gate (dimensionless, no material data). The sag
 estimate is a measurement, not a gate: a displacement limit needs a
-calibrated stiffness, and this milestone does not invent one.
+calibrated stiffness, and this milestone does not invent one. A
+joint-utilization cap (:class:`JointCap`) is a separate opt-in gate.
+It compares face-joint forces from this same solve to a strength the
+caller supplies, and it stays off when that cap is omitted. The
+newton figure in :func:`armadas_face_compression` is not a value of
+``k`` and it is not a force in the default ``mass·g`` unit.
 
 Coordinate frame
 ----------------
@@ -143,6 +148,34 @@ are not four springs and they do not add a rotational degree of
 freedom. A model that did split them could transmit a moment through
 one face, and these formulas would not apply. Nothing here is fit to
 ARMADAS hardware.
+
+Joint strength
+--------------
+Each face spring has a strength as well as a stiffness: axial
+compression, axial tension, shear, and optionally a moment.
+``None`` leaves that component unchecked. The solve still has no
+rotational degree of freedom, so :func:`joint_loads` reports no
+moment. A moment capacity is only consulted when a load carries one,
+which this network does not produce.
+
+Force is stiffness times the relative displacement of the two voxel
+centers, tension positive. Pitch does not enter. With
+``k = mass = g = 1`` a force is in units of ``mass·g``, because the
+displacement is in units of ``mass·g/k``. A capacity stated in
+newtons is a different unit. :func:`armadas_face_compression` derives
+one compression capacity, in newtons, from the published 3×3×3 cube
+and does not install it as the default.
+
+The gate allows ``capacity × safety_factor``. ``safety_factor`` is in
+``(0, 1]``. ``1`` means the capacity itself. A smaller factor is a
+reduction. Gregg et al. do not publish a design factor, so ``1`` is
+not one.
+
+On a one-voxel-wide bar, the spring whose outboard side is free voxel
+``i`` carries ``weight × (n − i + 1)``. A horizontal bar reports that
+as shear. A vertical bar reports it as compression. A downward tip
+load ``P`` adds ``P`` to every spring on the chain.
+:func:`path_chain_joint_force` is that magnitude.
 
 What this will not do
 ---------------------
@@ -341,6 +374,154 @@ class JointStrain(NamedTuple):
     axis: int
     axial: float
     shear: float
+
+
+class JointStrength(NamedTuple):
+    """Positive face-joint capacities. ``None`` skips that component.
+
+    Forces are in the same unit as ``k * displacement`` from
+    :func:`estimate_sag`. With the defaults that unit is ``mass·g``.
+    :func:`armadas_face_compression` is in newtons. Passing that number
+    into a ``k = 1`` solve compares two different units.
+
+    ``moment`` is optional. The lumped spring has no rotational degree
+    of freedom, so :func:`joint_loads` leaves the moment as ``None``
+    and a moment capacity is not consulted.
+    """
+
+    axial_compression: float | None = None
+    axial_tension: float | None = None
+    shear: float | None = None
+    moment: float | None = None
+
+
+class JointCap(NamedTuple):
+    """Opt-in utilization gate. Omit it and the check stays off.
+
+    A joint fails when a checked demand exceeds
+    ``capacity × safety_factor``. ``safety_factor`` is in ``(0, 1]``.
+    ``1`` allows the capacity. A smaller value is a reduction. The
+    stiffness, mass, and ``g`` are the solve that produces the demand.
+    The defaults ``k = mass = g = 1`` are not a fit, and the demand is
+    then in units of ``mass·g``.
+    """
+
+    strength: JointStrength
+    safety_factor: float = 1.0
+    k: float = 1.0
+    k_axial: float | None = None
+    k_shear: float | None = None
+    mass: float = 1.0
+    g: float = 1.0
+
+
+class JointLoad(NamedTuple):
+    """Force in one face spring, tension positive.
+
+    ``axial`` and ``shear`` are forces, not the strain proxy. ``shear``
+    is the magnitude of the perpendicular resultant. ``moment`` is
+    ``None`` for a load that came from :func:`joint_loads`.
+    """
+
+    a: Cell
+    b: Cell
+    axis: int
+    axial: float
+    shear: float
+    moment: float | None = None
+
+
+class JointUse(NamedTuple):
+    """Demand / capacity for one face joint.
+
+    A component whose capacity is ``None``, or a moment the solve did
+    not produce, has utilization ``None`` and does not enter
+    ``utilization``. ``utilization`` is 0 when every checked demand is
+    zero.
+    """
+
+    a: Cell
+    b: Cell
+    axis: int
+    axial_force: float
+    shear_force: float
+    moment: float | None
+    axial_utilization: float | None
+    shear_utilization: float | None
+    moment_utilization: float | None
+    utilization: float
+
+
+class JointAssessment(NamedTuple):
+    """:func:`assess_joints` for one partial build.
+
+    ``ok`` is true when every checked joint is at or under
+    ``safety_factor`` (demand / capacity). ``worst`` is the joint with
+    the largest utilization. Ties break toward the lexicographically
+    first pair.
+    """
+
+    ok: bool
+    worst_utilization: float
+    worst: JointUse | None
+    safety_factor: float
+    n_checked: int
+    n_over: int
+
+
+class ArmadasFaceCompression(NamedTuple):
+    """Published 3×3×3 cube, and the per-face number derived from it.
+
+    See :func:`armadas_face_compression`. ``face_compression_n`` is an
+    even-share idealization in newtons. It is not a measured break load
+    of one fastener, and it is not a ``mass·g`` force.
+    """
+
+    published_strength_kpa: float
+    published_strength_sd_kpa: float
+    published_strength_status: str
+    stiffness_mpa: float
+    stiffness_status: str
+    stiffness_sd_status: str
+    stiffness_sd_published_text: str
+    stiffness_sd_manuscript_mpa: float
+    failure_load_lower_bound_n: float
+    failure_load_status: str
+    manuscript_strength_kpa: float
+    manuscript_strength_sd_kpa: float
+    voxel_edge_m: float
+    n_across: int
+    gross_area_m2: float
+    implied_mean_load_n: float
+    implied_load_status: str
+    joints_per_interface: int
+    face_compression_n: float
+    face_compression_sd_n: float
+    shear_n: float | None
+    moment_nm: float | None
+    fastener_tension_n: float
+    fastener_tension_sd_n: float
+    fastener_tension_status: str
+
+
+# Absolute tolerance on demand/capacity. A joint sitting on the
+# allowable still passes, including a cap copied from a solved force.
+UTIL_ATOL = 1e-9
+
+# Gregg et al., Science Robotics 9, eadi2746 (2024). The published HTML
+# and the NTRS 20230005194 distribution PDF do not print the same
+# strength. Constants below keep both. The derivation uses the
+# published HTML figure and records the manuscript beside it.
+_PUBLISHED_STRENGTH_KPA = 11.38
+_PUBLISHED_STRENGTH_SD_KPA = 0.51
+_PUBLISHED_STIFFNESS_MPA = 1.1129
+_MANUSCRIPT_STRENGTH_KPA = 11.17
+_MANUSCRIPT_STRENGTH_SD_KPA = 0.77
+_MANUSCRIPT_STIFFNESS_SD_MPA = 0.0430
+_VOXEL_EDGE_M = 0.3048
+_FAILURE_LOAD_LOWER_BOUND_N = 9000.0
+_FASTENER_TENSION_N = 797.3
+_FASTENER_TENSION_SD_N = 8.71
 
 
 def occupied_voxels(world) -> tuple[Cell, ...]:
@@ -732,6 +913,363 @@ def joint_strains(
     return tuple(out)
 
 
+def joint_loads(
+    estimate: SagEstimate,
+    *,
+    k: float = 1.0,
+    k_axial: float | None = None,
+    k_shear: float | None = None,
+) -> tuple[JointLoad, ...]:
+    """Face-spring forces from an :func:`estimate_sag` result.
+
+    Pass the stiffness that produced ``estimate``. Force is that
+    stiffness times the relative displacement of the two centers.
+    Pitch is not used: the strain proxy divides by pitch, and the
+    force does not. Axial tension is positive. Shear is the magnitude
+    of the perpendicular force. ``moment`` is ``None``. This model has
+    no rotational degree of freedom, so a vertical load at a voxel
+    center does not become a face moment.
+
+    Order matches :func:`joint_strains`: ``a`` lexicographically before
+    ``b``. At ``pitch = 1`` the strain proxy equals the relative
+    displacement, and the force is stiffness times that proxy.
+    """
+    axial_k, shear_k = _stiffnesses(k, k_axial, k_shear)
+    disp = estimate.displacements
+    if not disp:
+        return ()
+    present = set(disp)
+    out: list[JointLoad] = []
+    for a in sorted(present):
+        ua = disp[a]
+        for b in _face_neighbors(a):
+            if b not in present or b < a:
+                continue
+            ub = disp[b]
+            axis = _joint_axis(a, b)
+            direction = 1.0 if b[axis] > a[axis] else -1.0
+            du = [ub[i] - ua[i] for i in range(len(a))]
+            axial = axial_k * direction * du[axis]
+            shear_sq = 0.0
+            for i, component in enumerate(du):
+                if i == axis:
+                    continue
+                shear_sq += (shear_k * component) ** 2
+            out.append(
+                JointLoad(
+                    a=a,
+                    b=b,
+                    axis=axis,
+                    axial=float(axial),
+                    shear=float(shear_sq**0.5),
+                    moment=None,
+                )
+            )
+    return tuple(out)
+
+
+def _ratio(demand: float, capacity: float | None) -> float | None:
+    if capacity is None:
+        return None
+    if capacity <= 0:
+        raise ValueError("a joint capacity must be positive")
+    return abs(float(demand)) / float(capacity)
+
+
+def joint_utilizations(
+    loads: Iterable[JointLoad], strength: JointStrength
+) -> tuple[JointUse, ...]:
+    """Demand / capacity for each load.
+
+    Compression (negative axial force) is compared with
+    ``axial_compression``. Tension is compared with ``axial_tension``.
+    A missing capacity skips that component. A missing moment on the
+    load skips the moment even when a moment capacity is set: the
+    spring network did not produce one.
+    """
+    _validate_strength(strength)
+    out: list[JointUse] = []
+    for load in loads:
+        if load.axial < 0:
+            axial_u = _ratio(load.axial, strength.axial_compression)
+        elif load.axial > 0:
+            axial_u = _ratio(load.axial, strength.axial_tension)
+        else:
+            axial_u = (
+                0.0
+                if (
+                    strength.axial_compression is not None
+                    or strength.axial_tension is not None
+                )
+                else None
+            )
+        shear_u = _ratio(load.shear, strength.shear)
+        if load.moment is None or strength.moment is None:
+            moment_u = None
+        else:
+            moment_u = _ratio(load.moment, strength.moment)
+        parts = [u for u in (axial_u, shear_u, moment_u) if u is not None]
+        out.append(
+            JointUse(
+                a=load.a,
+                b=load.b,
+                axis=load.axis,
+                axial_force=float(load.axial),
+                shear_force=float(load.shear),
+                moment=None if load.moment is None else float(load.moment),
+                axial_utilization=axial_u,
+                shear_utilization=shear_u,
+                moment_utilization=moment_u,
+                utilization=max(parts) if parts else 0.0,
+            )
+        )
+    return tuple(out)
+
+
+def _joints_from_solve(
+    occupied_cells: Iterable,
+    policy: StabilityPolicy | None,
+    cap: JointCap,
+    point_loads: Iterable | None,
+    frame: dict,
+) -> JointAssessment:
+    estimate = estimate_sag(
+        occupied_cells,
+        policy,
+        k=cap.k,
+        k_axial=cap.k_axial,
+        k_shear=cap.k_shear,
+        mass=cap.mass,
+        g=cap.g,
+        point_loads=point_loads,
+        **frame,
+    )
+    uses = joint_utilizations(
+        joint_loads(
+            estimate, k=cap.k, k_axial=cap.k_axial, k_shear=cap.k_shear
+        ),
+        cap.strength,
+    )
+    factor = float(cap.safety_factor)
+    over = [use for use in uses if use.utilization > factor + UTIL_ATOL]
+    worst: JointUse | None = None
+    for use in uses:
+        if worst is None or use.utilization > worst.utilization:
+            worst = use
+        elif use.utilization == worst.utilization and (use.a, use.b) < (
+            worst.a,
+            worst.b,
+        ):
+            worst = use
+    return JointAssessment(
+        ok=not over,
+        worst_utilization=0.0 if worst is None else float(worst.utilization),
+        worst=worst,
+        safety_factor=factor,
+        n_checked=len(uses),
+        n_over=len(over),
+    )
+
+
+def assess_joints(
+    occupied_cells: Iterable,
+    policy: StabilityPolicy | None = None,
+    cap: JointCap | None = None,
+    *,
+    point_loads: Iterable | None = None,
+    **frame,
+) -> JointAssessment:
+    """Joint utilization of one partial build, self-weight plus point loads.
+
+    ``point_loads`` is the same sequence :func:`estimate_sag` accepts.
+    Omit it for uniform self-weight. A singular spring network raises
+    :class:`ValueError`, as :func:`estimate_sag` does. An empty build
+    has no joints and is inside the cap.
+    """
+    if cap is None:
+        raise TypeError("assess_joints requires a JointCap")
+    _validate_joint_cap(cap)
+    return _joints_from_solve(occupied_cells, policy, cap, point_loads, frame)
+
+
+def joints_within(
+    occupied_cells: Iterable,
+    policy: StabilityPolicy | None = None,
+    cap: JointCap | None = None,
+    *,
+    point_loads: Iterable | None = None,
+    **frame,
+) -> bool:
+    """Whether every checked joint is within ``cap``.
+
+    ``cap is None`` accepts everything (the check is off). A bad cap
+    raises :class:`ValueError`. A singular partial build — nothing tied
+    to the base — is a failure, not a number. Empty input passes.
+    """
+    if cap is None:
+        return True
+    _validate_joint_cap(cap)
+    try:
+        report = _joints_from_solve(
+            occupied_cells, policy, cap, point_loads, frame
+        )
+    except ValueError:
+        return False
+    return report.ok
+
+
+def path_chain_joint_force(index: int, n_free: int, *, weight: float) -> float:
+    """Force magnitude in the spring outboard of which sits voxel ``index``.
+
+    ``index`` is 1 for the spring that meets the fixed root and
+    ``n_free`` for the spring at the tip. That spring carries the free
+    voxels from ``index`` through the tip, so the force is
+    ``weight * (n_free - index + 1)``. A horizontal bar reports it as
+    shear. A vertical bar reports it as compression. A tip point load
+    is not included; add the load to every spring when it is present.
+    """
+    if n_free < 1 or not (1 <= index <= n_free):
+        raise ValueError(
+            f"index must be in 1..n_free (got index={index}, n_free={n_free})"
+        )
+    return float(weight) * (n_free - index + 1)
+
+
+def armadas_face_compression() -> ArmadasFaceCompression:
+    """Per-face compression derived from the published 3×3×3 cube.
+
+    Read on 2026-10-18 from the Science Robotics HTML of Gregg et al.,
+    doi:10.1126/scirobotics.adi2746, and from the NTRS 20230005194
+    distribution PDF of that manuscript. The two texts do not agree.
+    This function uses the published HTML strength and records the
+    manuscript beside it. It does not average them.
+
+    Confirmed in the published HTML
+        * Strength 11.38 kPa (SD ±0.51 kPa).
+        * "an average failure load of more than 9000 N" — a lower
+          bound, not a printed mean.
+        * Assembly stiffness 1.1129 MPa.
+        * Failure at the fastener, before strut buckling. The methods
+          in the manuscript (the HTML methods match on this sentence)
+          say the tooth root failed and every failure was on the center
+          voxel column. Three specimens. Voxel bounding-box edge
+          304.8 mm.
+        * One locked fastener pair held 797.3 N (±8.71 N) in tension
+          in a fixture. The paper says that number is not the
+          separation force between two voxels, which is higher because
+          the fastener preloads the joint. It is not used here.
+
+    Confirmed in the NTRS manuscript, and different
+        * Strength 11.17 kPa (±0.77 kPa) in the body; the abstract
+          prints 11.17 kPa as well. Stiffness still 1.1129 MPa, with
+          ±0.0430 MPa.
+
+    Unconfirmed
+        * The stiffness standard deviation. The published HTML prints
+          "SD ±0.779 kPa" on a 1.1129 MPa value. The manuscript prints
+          ±0.0430 MPa. Those are not the same number, and the HTML unit
+          is not the unit of the stiffness. Neither is adopted.
+        * The exact mean failure load in newtons. Both texts say more
+          than 9000 N. Table S7 is cited for the chord modulus. The
+          per-specimen loads are not in the main text.
+        * Shear and moment. The test is uniaxial compression between
+          plates. It does not measure either.
+        * The gross area. The main text says ultimate strength was
+          calculated from the maximum load and does not print the area.
+          The derivation below assumes the cellular-material area, the
+          3×3 bounding box. The implied load is consistent with "more
+          than 9000 N". Consistency is not a printed area.
+
+    Derivation, published strength, even share
+        Edge ``L = 0.3048 m``. Three voxels on a side.
+
+            A = (3 L)²
+            F = (11.38 kPa) × A
+
+        ``F`` is derived. It is not a reported load. A 3-high stack has
+        two horizontal interfaces in series, so the compressive force
+        through each interface is ``F``, not ``F/2``. One interface is
+        3×3 face joints:
+
+            N_face = F / 9
+
+        The methods call the modulus window "even loading of the
+        lattice". Dividing by 9 is that idealization. It is not the
+        load in the tooth that broke. All three specimens failed on the
+        center column, so the center joint may have carried more than
+        one ninth. Using one ninth as the capacity is then conservative
+        for a gate, and it is still not a measured per-joint break load.
+        The four fasteners on a face stay one spring in this model.
+        Dividing by four would invent a per-tooth compression capacity
+        the paper does not give.
+
+        The standard deviation on ``N_face`` propagates only the
+        published strength SD through the same area and the same
+        nine-way split. It does not include area uncertainty or
+        load-share uncertainty.
+
+        The 1.1129 MPa figure is the assembly chord modulus. It is not
+        ``k_axial``. Turning it into a joint stiffness would assign
+        strut compliance to the face spring. ``k`` stays 1 until a
+        specimen is fit.
+    """
+    n_across = 3
+    area = (n_across * _VOXEL_EDGE_M) ** 2
+    strength_pa = _PUBLISHED_STRENGTH_KPA * 1_000.0
+    load = strength_pa * area
+    n_joints = n_across * n_across
+    face = load / n_joints
+    face_sd = (_PUBLISHED_STRENGTH_SD_KPA * 1_000.0) * area / n_joints
+    return ArmadasFaceCompression(
+        published_strength_kpa=_PUBLISHED_STRENGTH_KPA,
+        published_strength_sd_kpa=_PUBLISHED_STRENGTH_SD_KPA,
+        published_strength_status="confirmed",
+        stiffness_mpa=_PUBLISHED_STIFFNESS_MPA,
+        stiffness_status="confirmed",
+        stiffness_sd_status="unconfirmed",
+        stiffness_sd_published_text="SD ±0.779 kPa",
+        stiffness_sd_manuscript_mpa=_MANUSCRIPT_STIFFNESS_SD_MPA,
+        failure_load_lower_bound_n=_FAILURE_LOAD_LOWER_BOUND_N,
+        failure_load_status="confirmed as a lower bound, not a mean",
+        manuscript_strength_kpa=_MANUSCRIPT_STRENGTH_KPA,
+        manuscript_strength_sd_kpa=_MANUSCRIPT_STRENGTH_SD_KPA,
+        voxel_edge_m=_VOXEL_EDGE_M,
+        n_across=n_across,
+        gross_area_m2=area,
+        implied_mean_load_n=load,
+        implied_load_status="derived from published strength × gross area; not printed",
+        joints_per_interface=n_joints,
+        face_compression_n=face,
+        face_compression_sd_n=face_sd,
+        shear_n=None,
+        moment_nm=None,
+        fastener_tension_n=_FASTENER_TENSION_N,
+        fastener_tension_sd_n=_FASTENER_TENSION_SD_N,
+        fastener_tension_status=(
+            "confirmed as a fixture break load of one fastener pair; "
+            "the paper says this is not the voxel separation force; not used"
+        ),
+    )
+
+
+def armadas_joint_strength() -> JointStrength:
+    """Compression capacity from :func:`armadas_face_compression`.
+
+    The number is newtons. Shear and moment stay ``None`` because the
+    cube test did not measure them. Tension stays ``None`` because the
+    797.3 N fixture result is not the face separation force. Do not
+    pass this strength to a solve whose ``k``, ``mass``, and ``g`` are
+    still 1.
+    """
+    derived = armadas_face_compression()
+    return JointStrength(
+        axial_compression=derived.face_compression_n,
+        axial_tension=None,
+        shear=None,
+        moment=None,
+    )
+
+
 def path_chain_deflection_at(
     index: int,
     n_free: int,
@@ -872,6 +1410,7 @@ def robot_stance_ok(
     k_shear: float | None = None,
     mass: float = 1.0,
     g: float = 1.0,
+    joints: JointCap | None = None,
     **frame,
 ) -> tuple[bool, str]:
     """Whether a robot may stand on ``foot_cells`` of this partial build.
@@ -890,6 +1429,10 @@ def robot_stance_ok(
     gripper) on top of ``policy.robot_mass``. Both masses default to
     0. The comparison allows a 1e-6 absolute tolerance so a cap set
     equal to a just-computed sag still passes.
+
+    ``joints``, when given, runs the same foot loads through
+    :func:`joints_within`. The cap owns its stiffness and mass. A crane
+    stance has no feet, so neither check runs.
     """
     feet = [tuple(int(x) for x in cell) for cell in foot_cells]
     if not feet:
@@ -911,7 +1454,7 @@ def robot_stance_ok(
                 f"foot voxel {cell} overhang {dist} exceeds cantilever "
                 f"limit {limit}",
             )
-    if resolved.max_sag is None:
+    if resolved.max_sag is None and joints is None:
         return True, "within cantilever; sag cap is off"
     carried = resolved.carried_mass if carrying else 0.0
     loads = split_foot_loads(
@@ -920,23 +1463,33 @@ def robot_stance_ok(
         carried_mass=carried,
         g=g,
     )
-    estimate = estimate_sag(
-        occupied_cells,
-        resolved,
-        k=k,
-        k_axial=k_axial,
-        k_shear=k_shear,
-        mass=mass,
-        g=g,
-        point_loads=loads,
-    )
-    cap = float(resolved.max_sag)
-    if estimate.worst_sag > cap + 1e-6:
+    if resolved.max_sag is not None:
+        estimate = estimate_sag(
+            occupied_cells,
+            resolved,
+            k=k,
+            k_axial=k_axial,
+            k_shear=k_shear,
+            mass=mass,
+            g=g,
+            point_loads=loads,
+        )
+        cap = float(resolved.max_sag)
+        if estimate.worst_sag > cap + 1e-6:
+            return (
+                False,
+                f"sag {estimate.worst_sag:.6g} with robot loads exceeds "
+                f"max_sag {cap:.6g}",
+            )
+    if joints is not None and not joints_within(
+        occupied_cells, resolved, joints, point_loads=loads
+    ):
         return (
             False,
-            f"sag {estimate.worst_sag:.6g} with robot loads exceeds "
-            f"max_sag {cap:.6g}",
+            "a face joint exceeds capacity × safety factor under the foot loads",
         )
+    if resolved.max_sag is None:
+        return True, "within cantilever and joint cap"
     return True, "within cantilever and sag cap"
 
 
@@ -1129,6 +1682,37 @@ def _reachable(seeds: Iterable[Cell], occupied: set[Cell]) -> set[Cell]:
                 seen.add(nxt)
                 queue.append(nxt)
     return seen
+
+
+def _validate_strength(strength: JointStrength) -> None:
+    found = False
+    for name in ("axial_compression", "axial_tension", "shear", "moment"):
+        value = getattr(strength, name)
+        if value is None:
+            continue
+        if float(value) <= 0:
+            raise ValueError(
+                f"{name} capacity must be positive, or None to leave it unchecked"
+            )
+        found = True
+    if not found:
+        raise ValueError(
+            "JointStrength needs at least one positive capacity; "
+            "None leaves that component unchecked"
+        )
+
+
+def _validate_joint_cap(cap: JointCap) -> None:
+    _validate_strength(cap.strength)
+    factor = float(cap.safety_factor)
+    if not (0.0 < factor <= 1.0):
+        raise ValueError(
+            "safety_factor must be in (0, 1]; allowable load is "
+            "capacity × safety_factor"
+        )
+    _stiffnesses(cap.k, cap.k_axial, cap.k_shear)
+    if cap.mass < 0 or cap.g < 0:
+        raise ValueError("mass and g must be non-negative")
 
 
 def _stiffnesses(

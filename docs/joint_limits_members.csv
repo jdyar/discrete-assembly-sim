@@ -1,0 +1,5 @@
+build,sag_mg_per_k,compression_mg,shear_mg,sag_only_count,sag_only_status,joint_at_finished_count,joint_at_finished_status,joint_half_count,joint_half_status,k,mass,g
+level-2 cantilever length=3,10,4,3,0,ok,0,ok,,infeasible,1,1,1
+level-2 cantilever length=6,28,7,6,0,ok,0,ok,,infeasible,1,1,1
+tower n_free=3,6,3,0,0,ok,0,ok,,infeasible,1,1,1
+tower n_free=6,21,6,0,0,ok,0,ok,,infeasible,1,1,1

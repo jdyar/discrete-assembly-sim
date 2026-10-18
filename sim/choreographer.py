@@ -43,9 +43,11 @@ from .geometry import Geometry, bfs_path
 from .planner import SearchBudgetExceeded, plan_build_order
 from .reservations import OwnerId, ReservationConflict, ReservationTable
 from .stability import (
+    JointCap,
     SagCap,
     StabilityPolicy,
     is_stable,
+    joints_within,
     occupied_voxels,
     robot_stance_ok,
     sag_within,
@@ -260,6 +262,7 @@ def stability_gate(
     policy: StabilityPolicy,
     approach: Node | None = None,
     sag: SagCap | None = None,
+    joints: JointCap | None = None,
 ) -> bool:
     """May ``proposed_target`` be placed without an unstable partial build?
 
@@ -287,13 +290,18 @@ def stability_gate(
     :func:`~sim.stability.estimate_sag`'s, in ``mass·g/k`` at the cap's
     stiffness (the default ``k = 1`` is not a fit). ``None`` accepts
     every prefix.
+
+    ``joints``, when given, refuses a prefix whose face-joint demand
+    exceeds ``capacity × safety_factor``. The demand is in the cap's
+    force unit (``mass·g`` at ``k = mass = g = 1``). Foot loads are
+    included when the stance has feet. ``None`` skips the check.
     """
     cells = set(occupied_voxels(geometry.world))
     target = tuple(int(coord) for coord in proposed_target)
     feet = geometry.foot_cells(approach) if approach is not None else ()
     params = geometry.sag_parameters()
     if feet and not robot_stance_ok(
-        cells, feet, policy, carrying=True, **params
+        cells, feet, policy, carrying=True, joints=joints, **params
     )[0]:
         return False
     cells.add(target)
@@ -301,8 +309,10 @@ def stability_gate(
         return False
     if not sag_within(cells, policy, sag):
         return False
+    if not joints_within(cells, policy, joints):
+        return False
     if feet and not robot_stance_ok(
-        cells, feet, policy, carrying=False, **params
+        cells, feet, policy, carrying=False, joints=joints, **params
     )[0]:
         return False
     return True
@@ -385,6 +395,7 @@ def plan_task(
     stability: StabilityPolicy | None = None,
     sag: SagCap | None = None,
     check_buildability: bool = True,
+    joints: JointCap | None = None,
 ) -> TaskPlan | None:
     """Plan and RESERVE one full task: pos -> depot, PICK, -> stance,
     PLACE (deed), INSPECT + spare REMOVE slot.
@@ -436,7 +447,7 @@ def plan_task(
     ):
         return None
     if stability is not None and not stability_gate(
-        geometry, target, stability, approach=approach, sag=sag
+        geometry, target, stability, approach=approach, sag=sag, joints=joints
     ):
         return None
     if check_buildability and not buildability_gate(
@@ -509,6 +520,7 @@ def plan_remove_task(
     static_obstacles: frozenset | set = frozenset(),
     stability: StabilityPolicy | None = None,
     sag: SagCap | None = None,
+    joints: JointCap | None = None,
 ) -> TaskPlan | None:
     """Plan and reserve a scaffold removal: walk to a stance, REMOVE.
 
@@ -525,6 +537,8 @@ def plan_remove_task(
     if stability is not None and not is_stable(remaining, stability):
         return None
     if sag is not None and not sag_within(remaining, stability, sag):
+        return None
+    if joints is not None and not joints_within(remaining, stability, joints):
         return None
 
     graph = TimeExpandedGraph(geometry, table, owner, static_obstacles)

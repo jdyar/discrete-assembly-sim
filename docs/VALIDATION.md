@@ -96,6 +96,19 @@ Preferred first fit: the n = 3 arm at one recorded hanger mass (write which row)
 
 A tower (`k_axial`) and a bridge (no closed form; `estimate_sag` after both stiffnesses are fit) are later rounds. They are not in the table below.
 
+## What these prints measure, and what they do not
+
+The n = 3 and n = 6 cantilevers, once a round is filled, give `k_shear`. That is a stiffness. It is the number in the table above. It is not a joint strength.
+
+Face strength is a later print: a connector, loaded until the joint breaks, in compression, tension, and shear, with the break load written in the round. Moment, if the fixture can apply one, is the same kind of row. Until that print exists, every strength cell stays `PENDING`. Do not copy a stiffness into a capacity, and do not copy the ARMADAS 3×3×3 derivation (`armadas_face_compression` in `sim/stability.py`) into this table. That derivation is newtons from a published cellular strength. These PLA arms are not that specimen, and a `k = 1` solve is not in newtons.
+
+| specimen | component | break load | unit | status |
+| --- | --- | --- | --- | --- |
+| connector, future print | axial compression | | | PENDING |
+| connector, future print | axial tension | | | PENDING |
+| connector, future print | shear | | | PENDING |
+| connector, future print | moment | | | PENDING |
+
 ## Results
 
 Blank cells are not measured. Do not fill them from the formula.

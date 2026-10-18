@@ -69,9 +69,22 @@ multiple of ``every``) gains::
       "displacements": [{"cell": [int, ...], "u": [float, ...]}, ...],
       "joints": [
         {"a": [int, ...], "b": [int, ...], "axis": int,
-         "axial": float, "shear": float}, ...
+         "axial": float, "shear": float,
+         "axial_force": float, "shear_force": float,
+         # only when StructureLog.strength is set:
+         "axial_utilization": float | null,
+         "shear_utilization": float | null,
+         "utilization": float}, ...
       ]
     }
+
+``axial`` / ``shear`` stay the strain proxy. ``axial_force`` /
+``shear_force`` are stiffness times relative displacement, in
+``mass*g`` unless ``si`` is set, in which case they are newtons only
+if ``k`` was actually in N/m. Utilization is demand/capacity and is
+omitted when no strength was configured. A sample that has a strength
+also stores ``worst_utilization``, ``worst_joint``, ``safety_factor``,
+and ``force_units``.
 
 ``u`` is the displacement vector in coordinate order. ``axial`` /
 ``shear`` are the strain proxy (relative displacement / ``pitch``),
@@ -97,12 +110,17 @@ from pathlib import Path
 from typing import Any
 
 from .stability import (
+    JointStrength,
     StabilityPolicy,
     _stiffnesses,
+    _validate_joint_cap,
     estimate_sag,
+    joint_loads,
     joint_strains,
+    joint_utilizations,
     occupied_voxels,
 )
+from .stability import JointCap as _JointCap
 from .world import DEFECT, EMPTY, GROUND, SCAFFOLD, VOXEL, World
 
 RUN_LOG_VERSION = 2  # v2 adds "robots": [snapshot, ...]; "robot" kept for v1 readers
@@ -153,6 +171,12 @@ class StructureLog:
     # have no feet, so they still contribute nothing.
     robot_mass: float = 0.0
     carried_mass: float = 0.0
+    # Opt-in face strength. None leaves utilization out of the log.
+    # The numbers are capacities in the force unit of k * displacement
+    # (mass*g at the defaults). A newton capacity does not belong here
+    # while k, mass, and g are 1.
+    strength: JointStrength | None = None
+    safety_factor: float = 1.0
 
     def __post_init__(self) -> None:
         if int(self.every) < 1:
@@ -163,6 +187,18 @@ class StructureLog:
             raise ValueError("robot_mass and carried_mass must be >= 0")
         # Reject a bad stiffness at construction, not halfway through a run.
         _stiffnesses(self.k, self.k_axial, self.k_shear)
+        if self.strength is not None:
+            _validate_joint_cap(
+                _JointCap(
+                    self.strength,
+                    safety_factor=self.safety_factor,
+                    k=self.k,
+                    k_axial=self.k_axial,
+                    k_shear=self.k_shear,
+                    mass=self.mass,
+                    g=self.g,
+                )
+            )
         object.__setattr__(self, "every", int(self.every))
         object.__setattr__(self, "robot_mass", float(self.robot_mass))
         object.__setattr__(self, "carried_mass", float(self.carried_mass))
@@ -210,6 +246,21 @@ class StructureLog:
             block["robot_mass"] = float(self.robot_mass)
             block["carried_mass"] = float(self.carried_mass)
             block["includes_robot_loads"] = True
+        block["force_units"] = "N" if self.si else "mass*g"
+        if self.strength is not None:
+            block["safety_factor"] = float(self.safety_factor)
+            block["joint_strength"] = {
+                "axial_compression": self.strength.axial_compression,
+                "axial_tension": self.strength.axial_tension,
+                "shear": self.strength.shear,
+                "moment": self.strength.moment,
+            }
+            block["note"] = (
+                block["note"]
+                + " Joint utilization is demand/capacity. The gate allows"
+                " capacity × safety_factor. Forces use the same unfitted"
+                " stiffness as the displacement."
+            )
         return block
 
 
@@ -385,21 +436,60 @@ class RunLog:
                 {"cell": _cell_list(cell), "u": [float(v) for v in vec]}
                 for cell, vec in sorted(estimate.displacements.items())
             ],
-            "joints": [
-                {
-                    "a": _cell_list(joint.a),
-                    "b": _cell_list(joint.b),
-                    "axis": joint.axis,
-                    "axial": joint.axial,
-                    "shear": joint.shear,
-                }
-                for joint in joint_strains(estimate, pitch=spec.pitch)
-            ],
+            "joints": self._joint_records(spec, estimate),
         }
         if spec.robot_mass > 0 or spec.carried_mass > 0:
             sample["worst_sag_voxels"] = voxels_only.worst_sag
             sample["includes_robot_loads"] = bool(loads)
+        if spec.strength is not None:
+            uses = [
+                joint["utilization"]
+                for joint in sample["joints"]
+                if "utilization" in joint
+            ]
+            worst_u = max(uses) if uses else 0.0
+            worst_pair = None
+            for joint in sample["joints"]:
+                if joint.get("utilization") == worst_u:
+                    pair = (tuple(joint["a"]), tuple(joint["b"]))
+                    if worst_pair is None or pair < worst_pair:
+                        worst_pair = pair
+            sample["worst_utilization"] = worst_u
+            sample["worst_joint"] = (
+                None if worst_pair is None else [list(worst_pair[0]), list(worst_pair[1])]
+            )
+            sample["safety_factor"] = float(spec.safety_factor)
         return sample
+
+    @staticmethod
+    def _joint_records(spec: StructureLog, estimate) -> list[dict[str, Any]]:
+        strains = joint_strains(estimate, pitch=spec.pitch)
+        loads = joint_loads(
+            estimate, k=spec.k, k_axial=spec.k_axial, k_shear=spec.k_shear
+        )
+        uses = None
+        if spec.strength is not None:
+            uses = joint_utilizations(loads, spec.strength)
+        records = []
+        for index, strain in enumerate(strains):
+            load = loads[index]
+            record: dict[str, Any] = {
+                "a": _cell_list(strain.a),
+                "b": _cell_list(strain.b),
+                "axis": strain.axis,
+                "axial": strain.axial,
+                "shear": strain.shear,
+                "axial_force": load.axial,
+                "shear_force": load.shear,
+            }
+            if uses is not None:
+                use = uses[index]
+                record["axial_utilization"] = use.axial_utilization
+                record["shear_utilization"] = use.shear_utilization
+                record["moment_utilization"] = use.moment_utilization
+                record["utilization"] = use.utilization
+            records.append(record)
+        return records
 
     @staticmethod
     def _robot_loads(spec: StructureLog, crew: list | None) -> tuple:

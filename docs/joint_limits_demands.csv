@@ -1,0 +1,13 @@
+build,sag_mg_per_k,compression_mg,tension_mg,shear_mg,n_joints,half_compression_rejects,half_shear_rejects,half_sag_rejects,binder,k,mass,g
+cantilever n=3,6,0,0,3,3,False,True,True,shear+sag (compression demand ~0),1,1,1
+tower n=3,6,3,0,0,3,True,False,True,compression+sag (shear demand ~0),1,1,1
+cantilever n=6,21,0,0,6,6,False,True,True,shear+sag (compression demand ~0),1,1,1
+tower n=6,21,6,0,0,6,True,False,True,compression+sag (shear demand ~0),1,1,1
+bridge span=4,4.5,2.5,0,1.5,6,True,True,True,compression+shear+sag,1,1,1
+bridge span=4 one-sided,15,5,0,4,5,True,True,True,compression+shear+sag,1,1,1
+bridge span=5,6,3,0,2,7,True,True,True,compression+shear+sag,1,1,1
+bridge span=5 one-sided,21,6,0,5,6,True,True,True,compression+shear+sag,1,1,1
+bridge span=6,8,3.5,0,2.5,8,True,True,True,compression+shear+sag,1,1,1
+bridge span=6 one-sided,28,7,0,6,7,True,True,True,compression+shear+sag,1,1,1
+ARMADAS shelter,48.7104,10.344,0.0934695,3.164,538,True,True,True,compression+shear+sag,1,1,1
+cantilever n=3 tip load P=2,12,0,0,5,3,False,True,True,shear+sag (compression demand ~0); root shear 3 -> 5 (closed form 5),1,1,1

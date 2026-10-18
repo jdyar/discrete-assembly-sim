@@ -31,7 +31,11 @@ function returns ``None``.
 
 Sag uses :func:`~sim.stability.estimate_sag`. With the default
 :class:`~sim.stability.SagCap` that is units of ``mass·g/k`` at
-``k = 1``. That stiffness is not a fit.
+``k = 1``. That stiffness is not a fit. An optional
+:class:`~sim.stability.JointCap` applies the same rule to face-joint
+forces: a prefix whose demand exceeds ``capacity × safety_factor`` is
+refused, and a finished structure that already exceeds it is not
+rescued. At ``k = 1`` those forces are ``mass·g``, not newtons.
 """
 
 from __future__ import annotations
@@ -49,10 +53,12 @@ from .planner import (
     validate_plan,
 )
 from .stability import (
+    JointCap,
     SagCap,
     StabilityPolicy,
     estimate_sag,
     is_stable,
+    joints_within,
     occupied_voxels,
     sag_within,
 )
@@ -229,10 +235,18 @@ def caps_for_finished(
     return policy, SagCap(max_sag=float(worst), k=1.0, mass=1.0, g=1.0)
 
 
-def permanent_passes(world: World3D, stability: StabilityPolicy, sag: SagCap) -> bool:
-    """The finished structure, with no scaffold, is inside both caps."""
-    return is_stable(finished_cells(world), stability) and sag_within(
-        finished_cells(world), stability, sag
+def permanent_passes(
+    world: World3D,
+    stability: StabilityPolicy,
+    sag: SagCap,
+    joints: JointCap | None = None,
+) -> bool:
+    """The finished structure, with no scaffold, is inside the caps."""
+    cells = finished_cells(world)
+    return (
+        is_stable(cells, stability)
+        and sag_within(cells, stability, sag)
+        and joints_within(cells, stability, joints)
     )
 
 
@@ -245,6 +259,7 @@ def plan_with_scaffold(
     *,
     max_nodes: int = 50_000,
     max_scaffold: int | None = None,
+    joints: JointCap | None = None,
 ) -> ScaffoldPlan | None:
     """Minimal scaffold, then minimal sequential travel cost.
 
@@ -256,7 +271,7 @@ def plan_with_scaffold(
 
     The world is not modified.
     """
-    if not permanent_passes(world, stability, sag):
+    if not permanent_passes(world, stability, sag, joints):
         return None
     candidates = support_candidates(world)
     limit = len(candidates) if max_scaffold is None else min(max_scaffold, len(candidates))
@@ -277,6 +292,7 @@ def plan_with_scaffold(
                     sag,
                     tuple(subset),
                     max_nodes,
+                    joints,
                 )
             except SearchBudgetExceeded:
                 undecided = True
@@ -304,6 +320,7 @@ def _plan_subset(
     sag: SagCap,
     subset: tuple,
     max_nodes: int,
+    joints: JointCap | None = None,
 ) -> ScaffoldPlan | None:
     scratch = world.copy()
     for cell in subset:
@@ -317,11 +334,18 @@ def _plan_subset(
         max_nodes=max_nodes,
         stability=stability,
         sag=sag,
+        joints=joints,
     )
     if places is None:
         return None
     ok, _reason = validate_plan(
-        scratch, places, depot, geometry_factory, stability=stability, sag=sag
+        scratch,
+        places,
+        depot,
+        geometry_factory,
+        stability=stability,
+        sag=sag,
+        joints=joints,
     )
     if not ok:
         return None
@@ -329,7 +353,9 @@ def _plan_subset(
     scaffold = set(subset)
     for task in places:
         built.place_voxel(task.cell, scaffold=task.cell in scaffold)
-    removes = _best_removal(built, subset, depot, geometry_factory, stability, sag)
+    removes = _best_removal(
+        built, subset, depot, geometry_factory, stability, sag, joints
+    )
     if removes is None:
         return None
     return ScaffoldPlan(
@@ -347,6 +373,7 @@ def _best_removal(
     geometry_factory: GeometryFactory,
     stability: StabilityPolicy,
     sag: SagCap,
+    joints: JointCap | None = None,
 ) -> list[Task] | None:
     """Removal order of ``scaffold`` that stays inside the caps.
 
@@ -385,6 +412,7 @@ def _best_removal(
                     geometry.is_footing(approach)
                     and is_stable(occupied_voxels(built), stability)
                     and sag_within(occupied_voxels(built), stability, sag)
+                    and joints_within(occupied_voxels(built), stability, joints)
                     and bfs_path(geometry, approach, {depot}) is not None
                 )
                 if legal:
@@ -412,6 +440,7 @@ def check_assembly(
     geometry_factory: GeometryFactory,
     stability: StabilityPolicy,
     sag: SagCap,
+    joints: JointCap | None = None,
 ) -> tuple[bool, str]:
     """Replay ``plan`` and refuse any prefix that breaks a gate.
 
@@ -441,6 +470,8 @@ def check_assembly(
             return False, f"{label}: cantilever gate failed"
         if not sag_within(occupied_voxels(scratch), stability, sag):
             return False, f"{label}: sag cap failed"
+        if not joints_within(occupied_voxels(scratch), stability, joints):
+            return False, f"{label}: joint cap failed"
         if not geometry.is_footing(approach) or bfs_path(geometry, approach, {depot}) is None:
             return False, f"{label}: robot stranded"
     if not scratch.complete:
@@ -462,6 +493,8 @@ def check_assembly(
             return False, f"{label}: cantilever gate failed after removal"
         if not sag_within(occupied_voxels(scratch), stability, sag):
             return False, f"{label}: sag cap failed after removal"
+        if not joints_within(occupied_voxels(scratch), stability, joints):
+            return False, f"{label}: joint cap failed after removal"
         if not geometry.is_footing(approach) or bfs_path(geometry, approach, {depot}) is None:
             return False, f"{label}: robot stranded by the removal"
     if any(scratch.occupancy[cell] == SCAFFOLD for cell in scaffold):
