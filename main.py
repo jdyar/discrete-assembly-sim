@@ -15,6 +15,8 @@ log goes to runs/latest.json for the replay viewer.
     python main.py stability smoke
     python main.py onlattice  # on-lattice inchworm + weight -> docs/on_lattice.*
     python main.py scaffold   # temporary supports -> docs/scaffold_campaign.*
+    python main.py armadas    # shelter throughput sweep -> docs/armadas_sweep.*
+    python main.py armadas smoke
 """
 
 from __future__ import annotations
@@ -627,6 +629,11 @@ def main() -> None:
         from experiments.scaffold_campaign import main as scaffold_main
 
         scaffold_main(sys.argv[2:])
+        return
+    elif mode == "armadas":
+        from experiments.armadas import main as armadas_main
+
+        armadas_main(sys.argv[2:])
         return
     elif mode == "swarm":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 2
