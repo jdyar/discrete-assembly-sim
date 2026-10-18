@@ -78,6 +78,15 @@ multiple of ``every``) gains::
 axial positive in tension. A singular spring network is recorded as
 ``{"error": str}`` instead of aborting the run. These numbers are the
 linear-elastic estimate, not a measurement.
+
+Optional voxel shape (v0.2 milestone 4)
+----------------------------------------
+``meta.voxel_shape`` is ``"cuboctahedral"`` when the run used
+:class:`sim.cuboct.CuboctahedralLattice3D`. The key is omitted for the
+cubic default, which is what every older log is. The version does not
+change, and occupancy is still the cubic cell grid: the shape is which
+solid the viewer draws, not a different neighbor relation. The viewer
+can toggle the solid; a missing key stays cubic boxes.
 """
 
 from __future__ import annotations

@@ -1,20 +1,24 @@
 # Examples: plug your system into the coordination stack
 
-These are the two integration paths, each a single runnable file. Both
-run through the **unchanged** coordination stack — no forks, no patches.
+These files run through the **unchanged** coordination stack — no forks,
+no patches. The first two are the integration paths (your lattice, your
+robot). The third is the optional cuboctahedral solid that ships in
+`sim/cuboct.py`.
 
 ```bash
-python examples/hex_lattice.py   # bring your own LATTICE
-python examples/my_robot.py      # bring your own ROBOT
+python examples/hex_lattice.py      # bring your own LATTICE
+python examples/my_robot.py         # bring your own ROBOT
+python examples/cuboct_lattice.py   # cuboctahedral voxels, cubic cell grid
 ```
 
-Both are exercised by the test suite (`tests/test_examples.py`), so they
-cannot silently rot.
+All three are exercised by the test suite (`tests/test_examples.py`), so
+they cannot silently rot.
 
 ## Path 1 — your lattice (`hex_lattice.py`)
 
-The core library ships square-2D and cubic-3D lattices. This example
-implements a **hexagonal lattice** — which exists nowhere in the core —
+The core library ships a square-2D lattice, a cubic-3D lattice, and an
+optional cuboctahedral solid on that cubic grid (`sim/cuboct.py`). This
+example implements a **hexagonal lattice** — which exists nowhere in the core —
 in ~80 lines, then runs the stock build-order planner, validator, and
 two-robot swarm on it. What you implement:
 
@@ -50,6 +54,17 @@ don't even implement a Geometry — capabilities are `MotionModel` fields
 The example builds one blueprint under four hardware configurations and
 prints the tick counts — the "what does my hardware buy me" experiment,
 ready for your numbers.
+
+## Cuboctahedral voxels (`cuboct_lattice.py`)
+
+`sim/cuboct.py` is in the core library, not only in this example. It
+subclasses the cubic lattice: a 2×2×2 blueprint, one robot, the same
+planner and swarm. The cell graph is the cubic 6-neighbor graph. The
+solid is a cuboctahedron, and the four joint sites on each shared
+square are not the cube's face corners. The sag model still uses one
+lumped spring per face, so it is not a measured model of ARMADAS
+hardware. `python main.py cuboct` writes `runs/cuboct.json` for the
+replay viewer, which can draw either solid.
 
 ## When the interface can't express your system
 

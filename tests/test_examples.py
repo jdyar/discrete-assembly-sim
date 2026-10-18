@@ -35,6 +35,13 @@ class TestExamples(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         self.assertIn("coupled pair", result.stdout)
 
+    def test_cuboct_lattice_example(self):
+        result = run_example("cuboct_lattice.py")
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        self.assertIn("face topology matches", result.stdout)
+        self.assertIn("UNCHANGED", result.stdout)
+        self.assertIn("not ARMADAS stiffness", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

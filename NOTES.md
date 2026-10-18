@@ -83,6 +83,22 @@ the cubic voxel grid is confirmed over strut-level cuboct geometry.
 
 ## Session log
 
+### 2026-10-18 — v0.2 milestone 4: optional cuboctahedral solid
+
+`CuboctahedralLattice3D` in `sim/cuboct.py`, behind the existing
+Geometry interface. Default stays `CubicLattice3D`. Same 6-neighbor
+face graph, same locomotion, same stability frame, same lumped
+face-spring sag (closed forms still hold). Different vertices (12,
+edge midpoints) and different square-face joint sites (four corners of
+the 45° square; the face center does not move). Viewer toggle in
+`replay_viewer.html`; `meta.voxel_shape` is omitted for cubic logs.
+Citations checked: Gregg et al., Science Robotics 9, eadi2746 (2024),
+doi:10.1126/scirobotics.adi2746 — not 2018. Cheung & Gershenfeld,
+Science 341, 1219–1221 (2013), doi:10.1126/science.1240889, is the
+vertex-connected octahedron, which this does not implement. Jenett &
+Cheung, AIAA 2017-1876, doi:10.2514/6.2017-1876, put BILL-E on that
+octahedron. Not a mechanical model of ARMADAS hardware. 158 tests.
+
 ### 2026-10-18 — v0.2 milestone 3: cost of the stability gate
 
 `experiments/stability_cost.py`, `python main.py stability`. 312 trials,

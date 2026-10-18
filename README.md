@@ -34,11 +34,13 @@ python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-python examples/hex_lattice.py   # bring-your-own-LATTICE tutorial (see below)
-python examples/my_robot.py      # bring-your-own-ROBOT tutorial
+python examples/hex_lattice.py      # bring-your-own-LATTICE tutorial (see below)
+python examples/my_robot.py         # bring-your-own-ROBOT tutorial
+python examples/cuboct_lattice.py   # cuboctahedral voxels on the cubic grid
 
 python main.py swarm3d 2      # 2 robots build a 3D hollow box -> runs/latest.json
 python main.py bridge         # stability gate on, strain log -> runs/bridge.json
+python main.py cuboct         # 2×2×2 cuboctahedra -> runs/cuboct.json
 python main.py stability     # gate cost and effect -> docs/stability_cost.csv
 python main.py speedup3d      # speedup-vs-N (1..5) experiment -> runs/speedup_3d.png
 python main.py reach3d        # build ticks vs reach radius -> runs/ticks_vs_reach.png
@@ -48,10 +50,12 @@ python main.py swarm 2        # 2 robots, 2D wall (the degenerate case, kept hon
 python main.py                # single robot, defects + repair (the yield demo)
 python main.py yield          # the yield-vs-p experiment -> runs/yield_vs_p.png
 
-python -m unittest            # 142 tests: traps, 3D repair, fuzz, examples, stability, strain log
+python -m unittest            # 158 tests: traps, 3D repair, fuzz, examples, stability, strain log, cuboct
 ```
 
-**Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run. A log written with strain sampling (`python main.py bridge` → `runs/bridge.json`) adds a color mode for displacement or joint strain, a colorbar, a scale slider, and a marker on the worst-sag voxel. Logs without that data play exactly as before.
+**Watch a run:** open `replay_viewer.html` in a browser and drop `runs/latest.json` onto it — play / pause / scrub / orbit, 2D and 3D logs both. Serve the repo root (`python -m http.server`) and it auto-loads the latest run. A log written with strain sampling (`python main.py bridge` → `runs/bridge.json`) adds a color mode for displacement or joint strain, a colorbar, a scale slider, and a marker on the worst-sag voxel. Logs without that data play exactly as before. On a 3D log the voxel menu switches cubic boxes and cuboctahedra. `python main.py cuboct` sets `meta.voxel_shape` so the viewer opens on cuboctahedra; a log that omits the key, including every older log, stays cubic. The menu is a drawing toggle. It does not change the cell graph, and it is not a measurement of ARMADAS hardware.
+
+![Finished 2×2×2 cuboctahedral block in the replay viewer. The voxel menu is on cuboctahedron because the log says so. Same cells as a cube; the corners are the triangular faces of the cuboctahedron. Not a stiffness measurement.](docs/cuboct_viewer.png)
 
 ![Two-pier bridge colored by the spring-network displacement estimate. White cage: worst-sag cell. Scale 0.15×, because unfitted k = 1 sags several voxel-lengths; the colorbar is model units of mg/k, not a measurement on a printed part.](docs/strain_bridge.png)
 
@@ -103,7 +107,7 @@ The design bet of this repo: **coordination logic is invariant to robot hardware
 
 **Don't take the claim on faith — run the tutorials.** [`examples/hex_lattice.py`](examples/hex_lattice.py) implements a hexagonal lattice (which exists *nowhere* in the core library) in ~80 lines and runs the unchanged planner, validator, and two-robot swarm on it. [`examples/my_robot.py`](examples/my_robot.py) builds one blueprint under four different hardware configurations and prints what each buys you. Both are wired into the test suite so they can't rot. The step-by-step walkthrough — including the `WorldLike` protocol your world object must satisfy — is in [`examples/README.md`](examples/README.md).
 
-- **`Geometry`** (`sim/geometry.py`) — what a lattice is: `neighbors(node)`, `is_footing(node)`, `reach_cells(node)`. Nodes are opaque values; the 2D square lattice and the 3D cubic lattice are both ~150-line implementations, and the test suite includes a string-node triangle-lattice fake to prove nothing upstream assumes coordinates.
+- **`Geometry`** (`sim/geometry.py`) — what a lattice is: `neighbors(node)`, `is_footing(node)`, `reach_cells(node)`. Nodes are opaque values; the 2D square lattice and the 3D cubic lattice are both ~150-line implementations, and the test suite includes a string-node triangle-lattice fake to prove nothing upstream assumes coordinates. `CuboctahedralLattice3D` (`sim/cuboct.py`) is the optional third: cuboctahedral voxels on the cubic grid, same six face-neighbors and the same robot rules, different vertices and square-face joint sites. The cubic lattice stays the default.
 - **`MotionModel`** (`sim/geometry3d.py`) — what your robot can do, all config: **`reach_radius`** with snake-arm articulation (a target is reachable iff an empty-cell path of length ≤ radius runs from stance to target — bends around corners, never through walls); **`stride`** (multi-cell inchworm tick-moves, with swept cells protected by the reservation machinery via `move_footprint`); **`climb`** (0 = a ground-bound gantry robot, 1 = a TERMES-class climber); and **coupled pairs** (`MotionModel.coupled` — two attached robots as one logical robot with a combined arm chain, the BILL-E cooperative-manipulation lineage; dynamic mid-run attach/detach is future work).
 
 If your lab's robot climbs exactly one block (TERMES-style), that's config. If it places four cells away around a corner, that's config — and here's what turning that one knob does, with zero coordination changes:
@@ -122,6 +126,7 @@ sim/
   world.py, world3d.py  # occupancy grids (2D / 3D) + blueprint masks
   geometry.py           # THE SEAM: lattice interface + 2D square lattice
   geometry3d.py         # 3D cubic lattice + MotionModel (reach as config)
+  cuboct.py             # optional cuboctahedron on that same cubic grid
   planner.py            # build-order solver (proves safety at every step) + validator
   stability.py          # optional structural screen + linear-elastic sag (off unless asked)
   sequencer + swarm.py  # task claiming, kickback loop, displacement, watchdog
@@ -131,7 +136,7 @@ sim/
   robot.py              # single-robot state machine (the Slice 1-2 build)
   metrics.py            # replayable JSON run logs (v1/v2/v3) + charts
   render.py             # ASCII + matplotlib animation
-tests/                  # 142 tests incl. spec-first adversarial trap fixtures
+tests/                  # 158 tests incl. spec-first adversarial trap fixtures
 replay_viewer.html      # zero-build Three.js replay viewer (2D + 3D)
 docs/DESIGN.md          # binding architecture rules + provenance per stage
 ```
@@ -142,9 +147,9 @@ The multi-robot core, in one paragraph: an idle robot claims the nearest task fr
 
 A software study of the **discrete lattice assembly** lineage — simulator, not flight hardware:
 
-- **Digital materials** — Gershenfeld et al. (MIT CBA); Cheung & Gershenfeld, *Reversibly Assembled Cellular Composite Materials* (Science, 2013).
-- **Relative robots** — Jenett & Gershenfeld, **BILL-E**: robots smaller than the structure, locomoting on the lattice they build; cooperative manipulation between coupled robots (NTRS 20170006219).
-- **NASA Ames ARMADAS** — cuboctahedral voxels, SOLL-E inchworm builders, autonomous meter-scale builds (Gregg et al., Science Robotics, 2024). The choreography here is implemented clean-room from its published planning description: cooperative A*, node reservations, storage-location deadlock-freedom.
+- **Digital materials** — Gershenfeld et al. (MIT CBA); Cheung & Gershenfeld, *Reversibly Assembled Cellular Composite Materials*, Science 341, 1219–1221 (2013), doi:10.1126/science.1240889. Their "cuboct" lattice is vertex-connected octahedra, not the face-joined cuboctahedron in `sim/cuboct.py`.
+- **Relative robots** — Jenett & Cheung, *BILL-E: Robotic Platform for Locomotion and Manipulation of Lightweight Space Structures*, AIAA 2017-1876 (2017), doi:10.2514/6.2017-1876, NTRS 20170006219. BILL-E walks the octahedral lattice from the 2013 paper. Cooperative manipulation between coupled robots is the `MotionModel.coupled` config.
+- **NASA Ames ARMADAS** — face-joined cuboctahedral voxels (six square faces, four fasteners per face), SOLL-E inchworm builders, autonomous meter-scale builds. Gregg et al., *Ultralight, strong, and self-reprogrammable mechanical metamaterials*, Science Robotics 9, eadi2746 (2024), doi:10.1126/scirobotics.adi2746 (17 January 2024; NTRS 20230005194). The year 2018 sometimes attached to that title is wrong. The choreography here is implemented clean-room from the published planning description: cooperative A*, node reservations, storage-location deadlock-freedom. The optional cuboct solid matches that voxel's face graph and joint locations. It is not a calibrated model of the hardware.
 - **TERMES** — Werfel, Petersen & Nagpal (Science, 2014) + Petersen et al.'s error taxonomy; source of two of the trap-fixture failure classes.
 - **MAPF** — Stern et al., *Multi-Agent Pathfinding: Definitions, Variants, and Benchmarks* (arXiv:1906.08291); source of the corridor-swap trap.
 - **Theory backbone** — Winfree's Tile Assembly Model; the 1980 NASA self-replicating lunar factory study as the long arc.
@@ -161,7 +166,8 @@ Built in vertical slices — every milestone is a running end-to-end program wit
 - ✅ Snake-arm reach as config (radii 1–4 through the unchanged planner; ×1.75 at reach 4)
 - ✅ Motion-model remainder: multi-cell stride (reservation-sound swept cells), climb limit, coupled-robot pairs
 - ✅ Yield-vs-p at N in 3D (corrected 100% everywhere; uncorrected swarms jam, not decay); congestion knee vs structure size (×4.07 at N=5 on 96 voxels)
-- ✅ Structural checks, off by default: grounded connectivity, a cantilever limit, and a linear-elastic sag estimate. Milestone 3 (`python main.py stability`) measures the gate: on a span-5 bridge, limit 2 cuts peak intermediate sag from a median of 15 (range 10–15) to 6, and pays in makespan and kickbacks. Stiffness is still uncalibrated (k = 1). Still open: load cases beyond self-weight, a displacement limit inside the gate, cuboct joint mechanics
+- ✅ Structural checks, off by default: grounded connectivity, a cantilever limit, and a linear-elastic sag estimate. Milestone 3 (`python main.py stability`) measures the gate: on a span-5 bridge, limit 2 cuts peak intermediate sag from a median of 15 (range 10–15) to 6, and pays in makespan and kickbacks. Stiffness is still uncalibrated (k = 1). Still open: load cases beyond self-weight, a displacement limit inside the gate, fastener-level cuboct stiffness
+- ✅ Cuboctahedral voxels, milestone 4 (optional, cubic stays the default): same 6-neighbor grid and the same lumped face springs, so the sag closed forms still hold; different vertices and square-face joint sites; viewer menu draws either solid. Geometry and joint locations only — not a validated mechanical model of ARMADAS hardware (`python main.py cuboct`)
 - ✅ Strain visualization, milestone 2 (optional, off by default): per-placement displacement and joint-strain samples in the run log, and a viewer that colors, exaggerates, and marks the worst-sag cell. The picture is the uncalibrated spring model, not a measurement on a printed part
 - ⏳ Dynamic robot coupling (mid-run rendezvous/attach/detach)
 - ⏳ Typed part families

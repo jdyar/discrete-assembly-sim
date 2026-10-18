@@ -8,9 +8,10 @@ choreographer, and swarm run unchanged — they index occupancy/blueprint
 with opaque node tuples and never look inside them.
 
 Lattice decision (docs/DESIGN.md, lattice decisions): a simple cubic
-voxel grid, faithful to ARMADAS at the choreography level — cuboct voxels
-are assembled in a cubic array (voxel centers form a cubic lattice; the
-cuboct shape is parts/physics-level detail, not coordination-level).
+voxel grid. Cuboctahedral voxels, when selected
+(:class:`sim.cuboct.CuboctahedralLattice3D`), are assembled in this same
+array — centers on the integer lattice, six face-neighbors. The shape
+changes vertices and square-face joint sites, not this occupancy grid.
 """
 
 from __future__ import annotations

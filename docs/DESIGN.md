@@ -109,13 +109,21 @@ papers only:
 
 ## World & lattice decisions
 
-- **3D is a simple cubic voxel grid** (`sim/world3d.py`), faithful to
-  ARMADAS at the choreography level: cuboctahedral voxels are assembled
-  *in a cubic array* — voxel centers form a cubic lattice and robots
-  step voxel-to-voxel on the structure exterior. The cuboct shape
-  matters for parts/physics (future work), not for coordination. A
-  strut-level geometry, if ever needed, is just another Geometry
-  implementation.
+- **3D is a simple cubic voxel grid** (`sim/world3d.py`). Cuboctahedral
+  voxels, when a caller asks for them
+  (`CuboctahedralLattice3D` in `sim/cuboct.py`), are assembled *in that
+  same array*: centers on the integer lattice, six face-neighbors,
+  the same surface locomotion as `CubicLattice3D`. What changes is the
+  solid (12 vertices at the edge midpoints of the bounding cube, not 8
+  corners) and the in-plane joint sites (four corners of the shared
+  square face, rotated 45° from the cube's face corners). The face
+  center, where `estimate_sag` anchors one lumped axial/shear spring,
+  is the same point. The cubic lattice remains the default. This is a
+  geometry and joint-location model of the ARMADAS face-joined voxel
+  (Gregg et al., *Science Robotics* 2024, doi:10.1126/scirobotics.adi2746),
+  not a validated stiffness of that hardware, and not the 2013
+  vertex-connected octahedron (Cheung & Gershenfeld, *Science*). A
+  strut-level or fastener-resolved geometry would be another Geometry.
 - **Surface locomotion** generalizes the machine-verified 2D rules per
   axis-plane: footing = empty cell face-adjacent to a solid; movement =
   orthogonal steps plus in-plane corner rounding (exactly one of the

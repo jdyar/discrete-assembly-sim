@@ -10,8 +10,10 @@ only a Geometry implementation may look inside one.
 
 Slice 3a ships :class:`SquareLattice2D`, the existing BILL-E
 surface-locomotion rules (decided 2026-07-05, machine-verified — NOTES.md)
-moved here verbatim from ``sim.robot``. the multi-lattice roadmap implements the
-cuboctahedral lattice behind this same interface — not a port.
+moved here verbatim from ``sim.robot``. The cuboctahedral solid is
+:class:`sim.cuboct.CuboctahedralLattice3D`: the same 6-neighbor cell
+graph as the cubic lattice, with different vertices and square-face
+joint sites. It is optional. The cubic lattice remains the default.
 """
 
 from __future__ import annotations

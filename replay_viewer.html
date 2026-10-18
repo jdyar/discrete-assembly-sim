@@ -8,6 +8,11 @@
   joint strain). Older logs omit that key and still play. The colors are a
   spring-network estimate; stiffness is not fit to printed specimens.
 
+  3D logs may set meta.voxel_shape to "cuboctahedral". Absent, or "cubic",
+  draws the usual boxes. The shape control is display-only: it does not
+  change the cell graph, and 2D logs keep squares. The cuboctahedron is the
+  ARMADAS face-joined solid (see sim/cuboct.py), not a measured stiffness.
+
   Usage:
     - Open this file in a browser and drop a run-log JSON onto it (or use
       the file picker). Produce a log with `python main.py` -> runs/latest.json
@@ -53,8 +58,10 @@
   #colorWrap, #deformWrap {
     display: flex; align-items: center; gap: 6px; color: #94a3b8;
   }
-  #colorMode { font: inherit; color: #e2e8f0; background: #1e293b;
+  #colorMode, #voxelShape { font: inherit; color: #e2e8f0; background: #1e293b;
     border: 1px solid #334155; border-radius: 6px; padding: 4px 8px; }
+  #shapeWrap { display: flex; align-items: center; gap: 6px; color: #94a3b8; }
+  body.is-2d #shapeWrap { display: none !important; }
   #deform { width: 200px; accent-color: #a3e635; }
   #sagReadout { color: #fde68a; min-width: 180px; }
   #colorbar {
@@ -95,6 +102,12 @@
     <option value="30">4×</option>
   </select>
   <input id="file" type="file" accept=".json,application/json" />
+  <label id="shapeWrap" title="Display solid for 3D voxels, defects, and blueprint ghosts. Ground and robots stay boxes. Cuboctahedron is the face-joined ARMADAS voxel shape; the cell graph is unchanged. Logs without meta.voxel_shape open as cubic.">voxel
+    <select id="voxelShape">
+      <option value="cubic">cubic</option>
+      <option value="cuboctahedral">cuboctahedron</option>
+    </select>
+  </label>
   <label id="colorWrap" class="needs-structure">color
     <select id="colorMode">
       <option value="material">material</option>
@@ -128,7 +141,9 @@
   <div class="box">
     <h1>assembler-sim replay viewer</h1>
     <p>Drop a run-log JSON here (e.g. <code>runs/latest.json</code> from <code>python main.py</code>)<br>
-       or pick a file in the toolbar above.</p>
+       or pick a file in the toolbar above.<br>
+       3D only: the voxel menu draws cubic boxes or cuboctahedra.
+       A log without <code>meta.voxel_shape</code> stays cubic.</p>
   </div>
 </div>
 
@@ -199,6 +214,77 @@ const matRobots = ROBOT_COLORS.map(
   c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.4 }));
 const matCarry  = new THREE.MeshStandardMaterial({ color: 0x60a5fa, roughness: 0.4 });
 const unitBox   = new THREE.BoxGeometry(0.96, 0.96, 0.96);
+
+/* Cuboctahedron, pitch 1, before the 0.96 inset shared with the cube.
+   (x, y, z) = (col, level, row). Same order as sim.cuboct.viewer_offsets();
+   triangles are sim.cuboct.cuboct_triangles() (outward winding). */
+const CUBOCT_OFFSETS = [
+  [0, -0.5, -0.5],
+  [-0.5, -0.5, 0],
+  [0.5, -0.5, 0],
+  [0, -0.5, 0.5],
+  [-0.5, 0, -0.5],
+  [0.5, 0, -0.5],
+  [-0.5, 0, 0.5],
+  [0.5, 0, 0.5],
+  [0, 0.5, -0.5],
+  [-0.5, 0.5, 0],
+  [0.5, 0.5, 0],
+  [0, 0.5, 0.5],
+];
+const CUBOCT_TRIS = [
+  [0, 1, 4],
+  [5, 2, 0],
+  [6, 1, 3],
+  [3, 2, 7],
+  [4, 9, 8],
+  [8, 10, 5],
+  [11, 9, 6],
+  [7, 10, 11],
+  [0, 2, 3],
+  [0, 3, 1],
+  [9, 11, 10],
+  [9, 10, 8],
+  [4, 8, 5],
+  [4, 5, 0],
+  [3, 7, 11],
+  [3, 11, 6],
+  [1, 6, 9],
+  [1, 9, 4],
+  [5, 10, 7],
+  [5, 7, 2],
+];
+function makeCuboctGeometry() {
+  const positions = [];
+  for (const tri of CUBOCT_TRIS) {
+    for (const index of tri) {
+      const [x, y, z] = CUBOCT_OFFSETS[index];
+      positions.push(x * 0.96, y * 0.96, z * 0.96);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+const cuboctGeo = makeCuboctGeometry();
+
+/* Absent, unknown, or "cubic" stays the boxes this viewer has always drawn. */
+function voxelShapeFromLog(data) {
+  const shape = data && data.meta && data.meta.voxel_shape;
+  return shape === "cuboctahedral" ? "cuboctahedral" : "cubic";
+}
+let voxelShape = "cubic";
+function displayedVoxelGeometry() {
+  return voxelShape === "cuboctahedral" ? cuboctGeo : unitBox;
+}
+function applyVoxelShape(shape) {
+  voxelShape = shape === "cuboctahedral" ? "cuboctahedral" : "cubic";
+  const select = document.getElementById("voxelShape");
+  if (select) select.value = voxelShape;
+  const geo = displayedVoxelGeometry();
+  for (const mesh of cells.values()) mesh.geometry = geo;
+}
 
 /* ---------- run state ---------- */
 const LEGEND_DEFAULT = { EMPTY: 0, GROUND: 1, VOXEL: 2, DEFECT: 3 };
@@ -383,6 +469,7 @@ function loadRun(data) {
   }
   run = data;
   legend = (data.meta && data.meta.legend) || LEGEND_DEFAULT;
+  document.body.classList.toggle("is-2d", data.version !== 3);
   const { rows, cols, levels } = data.meta;
 
   scene.remove(buildGroup);
@@ -450,6 +537,11 @@ function loadRun(data) {
   const requestedScale = viewParams.get("deform");
   $("deform").value = requestedScale != null && requestedScale !== "" ? requestedScale : "0";
   $("deformVal").textContent = "0×";
+
+  const requestedShape = viewParams.get("shape");
+  applyVoxelShape(
+    data.version === 3 ? (requestedShape || voxelShapeFromLog(data)) : "cubic",
+  );
 
   orbit.target = new THREE.Vector3(0, (data.version === 3 ? levels : rows) / 2, 0);
   orbit.radius = Math.max(rows, cols, (levels || 0) * 2) * 1.9;
@@ -575,6 +667,7 @@ addEventListener("keydown", e => {
 });
 $("colorMode").addEventListener("change", () => setFrame(frame));
 $("deform").addEventListener("input", () => setFrame(frame));
+$("voxelShape").addEventListener("change", () => applyVoxelShape($("voxelShape").value));
 
 async function loadFile(file) {
   try { loadRun(JSON.parse(await file.text())); }
