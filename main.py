@@ -10,6 +10,7 @@ log goes to runs/latest.json for the replay viewer.
     python main.py slice1     # clean build, no defects, + ticks chart
     python main.py slice0     # the old ugly loop (no robot)
     python main.py bridge     # stability gate on, strain log -> runs/bridge.json
+    python main.py cuboct     # optional cuboctahedral voxels -> runs/cuboct.json
     python main.py stability # gate cost/effect campaign -> docs/stability_cost.*
     python main.py stability smoke
 """
@@ -267,8 +268,13 @@ def run_swarm3d_build(
     starts=None,
     stability=None,
     structure=None,
+    voxel_shape=None,
 ):
-    """Slice 4a/4b: N robots, 3D structure, same choreographer."""
+    """Slice 4a/4b: N robots, 3D structure, same choreographer.
+
+    ``voxel_shape`` is written to the log only when it is not the cubic
+    default. Omit it and the log matches the historical v3 contract.
+    """
     from sim.geometry3d import CubicLattice3D
     from sim.render import render_ascii3d
     from sim.swarm import Swarm
@@ -288,6 +294,10 @@ def run_swarm3d_build(
         depot=list(depot or DEPOT3D), n_robots=n_robots, defect_p=defect_p,
         seed=seed, correction=correction,
     )
+    if voxel_shape is not None:
+        from sim.cuboct import annotate_run_log
+
+        annotate_run_log(log, voxel_shape)
     log.log_tick(0, world, robots=swarm.robots)
     while not swarm.settled and swarm.tick_count < max_ticks:
         swarm.tick()
@@ -524,6 +534,57 @@ def run_bridge(verbose: bool = True):
     return log, swarm
 
 
+def run_cuboct(verbose: bool = True):
+    """Build the 2×2×2 cuboct demo. Cubic locomotion, cuboct solid.
+
+    Writes ``runs/cuboct.json`` with ``meta.voxel_shape`` set so the
+    replay viewer opens on cuboctahedra. The stability gate stays off.
+    This is a geometry and joint-location run, not an ARMADAS stiffness
+    measurement. The caller also stores the log at ``runs/latest.json``.
+    """
+    from sim.cuboct import (
+        EXAMPLE_DEPOT,
+        EXAMPLE_START,
+        VOXEL_SHAPE_CUBOCTAHEDRAL,
+        CuboctahedralLattice3D,
+        example_world,
+    )
+
+    world = example_world()
+    log, swarm = run_swarm3d_build(
+        world,
+        n_robots=1,
+        depot=EXAMPLE_DEPOT,
+        starts=[EXAMPLE_START],
+        geometry_factory=CuboctahedralLattice3D,
+        voxel_shape=VOXEL_SHAPE_CUBOCTAHEDRAL,
+        verbose=False,
+        max_ticks=8000,
+    )
+    if not world.complete:
+        raise RuntimeError(
+            f"cuboct demo did not finish: {world.built_count}/{world.blueprint_count} "
+            f"ticks={swarm.tick_count} kickbacks={swarm.kickbacks}"
+        )
+    saved = log.save("runs/cuboct.json")
+    if verbose:
+        from sim.render import render_ascii3d
+
+        print(render_ascii3d(world))
+        print(
+            f"cuboct: placed={world.built_count}/{world.blueprint_count} "
+            f"ticks={swarm.tick_count} kickbacks={swarm.kickbacks}"
+        )
+        print(
+            "voxel_shape=cuboctahedral (same 6-neighbor grid as cubic; "
+            "joint sites are the square-face corners)"
+        )
+        print(f"cuboct log: {saved}")
+        print("open replay_viewer.html and drop runs/cuboct.json")
+        print("  voxel menu: cuboctahedron (log default) or cubic")
+    return log, swarm
+
+
 def main() -> None:
     import sys
 
@@ -547,6 +608,8 @@ def main() -> None:
         return
     elif mode == "bridge":
         log, _swarm = run_bridge()
+    elif mode == "cuboct":
+        log, _swarm = run_cuboct()
     elif mode == "stability":
         from experiments.stability_cost import main as stability_main
 

@@ -135,6 +135,15 @@ compliance into ``k``; a continuously fused beam, where the member
 itself bends, will not follow the ``n(n+1)/2`` profile, and that
 disagreement is information about the model.
 
+Cuboctahedral voxels (:mod:`sim.cuboct`) use this same assembly. Their
+square faces meet on the same midplanes as the cubes, so the spring
+graph is the same 6-neighbor graph and the closed forms still hold.
+The four fastener corners on each square are joint *locations*; they
+are not four springs and they do not add a rotational degree of
+freedom. A model that did split them could transmit a moment through
+one face, and these formulas would not apply. Nothing here is fit to
+ARMADAS hardware.
+
 What this will not do
 ---------------------
 Robot weight, wind, payload, and fastener preload are not load cases.

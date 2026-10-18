@@ -12,7 +12,7 @@ git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-asse
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt  # numpy + matplotlib, nothing else
-python -m unittest               # 142 tests, ~30s — all green before and after your change
+python -m unittest               # 158 tests, ~30s — all green before and after your change
 ```
 
 No build step, no linter config to fight. Python 3.10+.
@@ -45,9 +45,11 @@ No build step, no linter config to fight. Python 3.10+.
 - **Author a trap** (`tests/test_traps3d.py` style): a blueprint +
   start placement you believe deadlocks, starves, entombs, or strands
   the build. Cite the failure class if it has one.
-- **A new `Geometry`**: hex lattice, cuboct strut-level, your lab's
-  lattice. The triangle-lattice fake in `tests/test_reservations.py`
-  shows the minimum contract; ~150 lines gets you a real one.
+- **A new `Geometry`**: the 2013 vertex-connected octahedron (distinct
+  from the face-joined cuboctahedron in `sim/cuboct.py`), a strut-level
+  or fastener-resolved joint, or your lab's lattice. The
+  triangle-lattice fake in `tests/test_reservations.py` shows the
+  minimum contract; ~150 lines gets you a real one.
 - **Run-log → USD / Isaac Sim exporter** (community-requested): the
   replayable JSON log (contract in `sim/metrics.py`) has everything a
   physics-fidelity replay needs — world dims, per-tick occupancy, and

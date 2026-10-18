@@ -36,6 +36,9 @@ the 26-cell shell — the machine-verified 2D convention lifted to 3D.
 The relation is symmetric (the same path reversed), preserving the
 planner's stance-inversion contract at every radius.
 Also decided 2026-07-16: the cubic voxel grid stands (see world3d.py).
+The optional cuboctahedral solid (:class:`sim.cuboct.CuboctahedralLattice3D`)
+is that same grid with a different voxel shape and different square-face
+joint sites. It is not a second movement graph.
 """
 
 from __future__ import annotations
@@ -98,7 +101,13 @@ class CubicLattice3D(Geometry):
     """The cubic voxel lattice under 3D surface-locomotion rules.
 
     Nodes are ``(level, row, col)``; level 0 is the ground plane, up is
-    +level. Rules are the 2D BILL-E set (decided 2026-07-05, NOTES.md)
+    +level. :attr:`voxel_shape` is ``"cubic"``: the displayed solid is a
+    cube, and a shared face's joint sites are that face's four corners.
+    The optional cuboctahedron
+    (:class:`sim.cuboct.CuboctahedralLattice3D`) keeps every rule below
+    and changes only the solid and those in-plane joint sites.
+
+    Rules are the 2D BILL-E set (decided 2026-07-05, NOTES.md)
     generalized per axis-plane:
 
     - **Footing**: any empty in-bounds cell face-adjacent (6-neighborhood)
@@ -114,6 +123,7 @@ class CubicLattice3D(Geometry):
       stance (symmetric; see module docstring).
     """
 
+    voxel_shape = "cubic"
     _SOLIDS = (GROUND, VOXEL, DEFECT)
 
     def __init__(self, world: World3D, motion: MotionModel = MotionModel()) -> None:
