@@ -20,16 +20,20 @@ Do not tag this until the printed-cantilever log in `docs/VALIDATION.md` has a r
 - Finished-structure stability precheck (`necessary_stability_precheck`). Overhang in the finished set lower-bounds every prefix. The hollow 3×3×2 roof at cantilever limit 0 is a proved rejection (6/6, median 0.0965 ms) instead of an undecided 200-node search.
 - Physical validation plan and empty log: `docs/VALIDATION.md`. One-piece PLA cantilevers, n = 3 and n = 6 free bays. Predicted self-weight tip ratio 3.5 (shear chain) against 16 (Euler–Bernoulli `n⁴`). No measured rows.
 - Headless viewer capture: `scripts/render_demo.py` (Playwright + ffmpeg). About 60 seconds, two-robot bridge with displacement coloring and the span drawn in place, then a cuboct block, with title cards. The mp4 is a generated artifact, not a committed blob.
+- Temporary scaffold (`sim/scaffold.py`). When the finished blueprint passes the cantilever and sag caps and no reachable order does, the planner adds the smallest set of support cells in the column under the blueprint, builds with them, and removes them in an order that stays inside the same caps. Scaffold is occupancy `SCAFFOLD`. It is solid, so a robot can walk on it, and it is not a blueprint cell. A finished structure that already fails the caps is not rescued. The secondary key after the count is `sequence_cost`, a single-robot depot-round-trip score. It is not the swarm tick count: the score charges a final return the swarm does not wait for.
+- Scaffold campaign, 90 trials (`python main.py scaffold`, `docs/scaffold_campaign.csv`). Spans 4–8, crane and on-lattice inchworm, robot/voxel ratios near 1, 1/3, and 1/10 (`n_robots = max(1, round(n_voxels / divisor))` for divisor 1, 3, 10), seeds {0, 1, 2}. 88 of 90 finished with the blueprint complete and no scaffold left. The crane needed 0 scaffold cells. The inchworm needed 3 on span 4 and 2 on spans 5–8. Two seeds hit the 4000-tick cap (span 6 with 9 robots, seed 2; span 8 with 4 robots, seed 2). Caps are the finished bridge's overhang and its `worst_sag` at `k = mass = g = 1` (units of mass·g/k; stiffness not fit).
+- Replay draws scaffold in construction yellow (`#f5c518`) in every color mode, including displacement. The box stays 0.96, the same size as a blueprint voxel. The run-log legend includes `SCAFFOLD`. Stills: `docs/scaffold_standing.png`, `docs/scaffold_removed.png`, `docs/scaffold_displacement.png`.
 
 ### Changed
 
 - `python main.py stability` counts a finished structure past the cantilever limit as infeasible from the precheck. The campaign in `docs/stability_cost.csv` was re-run: 202 feasible, 110 infeasible, 0 undecided. Build metrics on the trials that still run are the same comparison the gate-cost write-up reports.
 - Replay viewer draws cuboctahedra when `meta.voxel_shape` is `cuboctahedral`, and exposes `window.assemblerReplay` for the capture script.
 - Replay deformation no longer multiplies the raw `mg/k` vector. Default is the as-built geometry. The slider is a fraction of the voxel pitch, capped at 0.40, and the view is labeled exaggerated and normalized. Robots are drawn on the solid under them.
+- A time-expanded plan memoizes footing, neighbor lists, and stride footprints for that plan only. Successors are unchanged. Reservation checks stay live. Long-stride multi-robot walks were rebuilding the same base-step search at every tick of the horizon.
 
 ### Tests
 
-187 tests (`python -m unittest`): traps, 3D repair, fuzz, examples, the structural screen, the precheck, strain logging, the bridge blueprint against its finished log, the stability-gate smoke run, the cuboctahedral geometry, the inchworm gait, the tip point-load closed form, and a smoke run of the on-lattice campaign.
+197 tests (`python -m unittest`): traps, 3D repair, fuzz, examples, the structural screen, the precheck, strain logging, the bridge blueprint against its finished log, the stability-gate smoke run, the cuboctahedral geometry, the inchworm gait, the tip point-load closed form, a smoke run of the on-lattice campaign, and scaffold insertion and removal (previously infeasible inchworm bridges become feasible, removal stays inside the caps, no scaffold when the plain plan already works).
 
 ## [0.1.0] — 2026-07-25
 

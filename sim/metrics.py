@@ -16,7 +16,7 @@ Run-log JSON contract (v1)
       "version": 1,
       "meta": {
         "rows": int, "cols": int,
-        "legend": {"EMPTY": 0, "GROUND": 1, "VOXEL": 2},
+        "legend": {"EMPTY": 0, "GROUND": 1, "VOXEL": 2, "DEFECT": 3, "SCAFFOLD": 4},
         ...free-form extras (e.g. "depot": [row, col])
       },
       "blueprint": [[row, col], ...],          // static target cells
@@ -103,7 +103,7 @@ from .stability import (
     joint_strains,
     occupied_voxels,
 )
-from .world import DEFECT, EMPTY, GROUND, VOXEL, World
+from .world import DEFECT, EMPTY, GROUND, SCAFFOLD, VOXEL, World
 
 RUN_LOG_VERSION = 2  # v2 adds "robots": [snapshot, ...]; "robot" kept for v1 readers
 RUN_LOG_VERSION_3D = 3  # v3 = v2 with 3D nodes: meta gains "levels",
@@ -306,6 +306,7 @@ class RunLog:
                     "GROUND": GROUND,
                     "VOXEL": VOXEL,
                     "DEFECT": DEFECT,
+                    "SCAFFOLD": SCAFFOLD,
                 },
             )
             self.blueprint = [

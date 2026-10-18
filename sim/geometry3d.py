@@ -48,7 +48,7 @@ from itertools import product
 from typing import Iterator
 
 from .geometry import Geometry, Node
-from .world import DEFECT, EMPTY, GROUND, VOXEL
+from .world import DEFECT, EMPTY, GROUND, SCAFFOLD, VOXEL
 from .world3d import World3D
 
 _AXES = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
@@ -67,8 +67,12 @@ class MotionModel:
       :meth:`CubicLattice3D.move_footprint`.
     - ``climb``: maximum |level change| per tick-move. 1 = the default
       surface stepper (single steps can only change level by 1 anyway);
-      0 = a ground-bound robot (gantry/rover class); >= 2 matters once
+      0 = a ground-bound robot (gantry/crane class); >= 2 matters once
       stride allows multi-step tick-moves.
+    - ``lattice_only``: footing is only a cell next to a voxel, defect,
+      or scaffold, plus an explicit yard passed to the geometry. The
+      open ground plane is not a highway. An on-lattice inchworm uses
+      this so it has to cross a span on the structure it is building.
 
     Coupled robots (modeling decision 2026-07-19, delegated authority,
     flagged for review): two attached robots are modeled as ONE logical
@@ -84,6 +88,7 @@ class MotionModel:
     reach_radius: int = 1
     stride: int = 1
     climb: int = 1
+    lattice_only: bool = False
 
     def coupled(self, other: "MotionModel") -> "MotionModel":
         """The motion model of this robot rigidly attached to ``other``:
@@ -94,6 +99,7 @@ class MotionModel:
             reach_radius=self.reach_radius + other.reach_radius,
             stride=min(self.stride, other.stride),
             climb=min(self.climb, other.climb),
+            lattice_only=self.lattice_only or other.lattice_only,
         )
 
 
@@ -124,11 +130,20 @@ class CubicLattice3D(Geometry):
     """
 
     voxel_shape = "cubic"
-    _SOLIDS = (GROUND, VOXEL, DEFECT)
+    _SOLIDS = (GROUND, VOXEL, DEFECT, SCAFFOLD)
+    _LATTICE_SOLIDS = (VOXEL, DEFECT, SCAFFOLD)
 
-    def __init__(self, world: World3D, motion: MotionModel = MotionModel()) -> None:
+    def __init__(
+        self,
+        world: World3D,
+        motion: MotionModel = MotionModel(),
+        yard: tuple | frozenset = (),
+    ) -> None:
         self.world = world
         self.motion = motion
+        # Cells that stay walkable when ``lattice_only`` is set (the
+        # depot yard). Ignored for the default ground-walking robot.
+        self.yard = frozenset(yard)
 
     def _in_bounds(self, node) -> bool:
         l, r, c = node
@@ -146,6 +161,21 @@ class CubicLattice3D(Geometry):
             return False
         if self.world.occupancy[node] != EMPTY:  # DEFECT counts as occupied
             return False
+        if self.motion.lattice_only:
+            # On-lattice gait: the ground plane is not a walking surface.
+            # The yard (depot side) is the exception that lets the robot
+            # start. Scaffold counts, so a temporary pier is a step.
+            if node in self.yard:
+                return True
+            l, r, c = node
+            return any(
+                self._in_bounds(nbr) and self.world.occupancy[nbr] in self._LATTICE_SOLIDS
+                for nbr in (
+                    (l + s * dl, r + s * dr, c + s * dc)
+                    for dl, dr, dc in _AXES
+                    for s in (1, -1)
+                )
+            )
         l, r, c = node
         return any(
             self._solid((l + s * dl, r + s * dr, c + s * dc))
@@ -267,13 +297,19 @@ class CubicLattice3D(Geometry):
         # Supported-first (nothing floats unless it must), bottom-up,
         # farthest-from-depot first — keeps a climbable ramp depot-side.
         l, r, c = target
-        supported = l > 0 and self.world.occupancy[l - 1, r, c] in (GROUND, VOXEL)
+        supported = l > 0 and self.world.occupancy[l - 1, r, c] in (
+            GROUND,
+            VOXEL,
+            DEFECT,
+            SCAFFOLD,
+        )
         horiz = max(abs(r - depot[1]), abs(c - depot[2]))
         return (not supported, l, -horiz)
 
     def bound_factory(self):
         motion = self.motion
-        return lambda world: CubicLattice3D(world, motion)
+        yard = self.yard
+        return lambda world: CubicLattice3D(world, motion, yard)
 
     def heuristic_distance(self, a, b) -> int:
         # Chebyshev over stride: a tick-move changes each coordinate by
@@ -287,7 +323,7 @@ class CubicLattice3D(Geometry):
         for node in solid_nodes:
             if clone.occupancy[node] == EMPTY:
                 clone.occupancy[node] = VOXEL
-        return CubicLattice3D(clone, self.motion)
+        return CubicLattice3D(clone, self.motion, self.yard)
 
     def stability_policy(self, max_cantilever: int | None = 0):
         # Level 0 is the solid ground plane; levels increase upward.

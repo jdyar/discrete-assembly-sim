@@ -4,6 +4,7 @@
 ASCII legend:
     ``#`` placed voxel
     ``x`` defective voxel (Slice 2)
+    ``+`` temporary scaffold
     ``o`` blueprint cell not yet built
     ``=`` ground row
     ``.`` empty air
@@ -21,19 +22,22 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .world import DEFECT, EMPTY, GROUND, VOXEL, World
+from .world import DEFECT, EMPTY, GROUND, SCAFFOLD, VOXEL, World
 
-_GLYPHS = {EMPTY: ".", GROUND: "=", VOXEL: "#", DEFECT: "x"}
+_GLYPHS = {EMPTY: ".", GROUND: "=", VOXEL: "#", DEFECT: "x", SCAFFOLD: "+"}
 
 # Display codes for the animation (occupancy legend + two overlay codes).
-_GHOST = 4  # blueprint cell not yet built
-_ROBOT = 5
+# Overlay codes sit above SCAFFOLD (4) so a temporary support is not
+# drawn as a ghost or a robot.
+_GHOST = 6  # blueprint cell not yet built
+_ROBOT = 7
 
 _COLORS = {
     EMPTY: "#ffffff",   # air
     GROUND: "#4b5563",  # ground row
     VOXEL: "#2563eb",   # placed voxel
     DEFECT: "#dc2626",  # defective voxel
+    SCAFFOLD: "#f5c518",  # temporary support
     _GHOST: "#dbeafe",  # pending blueprint (ghost)
     _ROBOT: "#f97316",  # robot
 }
@@ -123,7 +127,13 @@ def animate_run(
 
     frames = run["ticks"]
     blueprint = run["blueprint"]
-    cmap = ListedColormap([_COLORS[i] for i in sorted(_COLORS)])
+    # One slot per occupancy code. A gap (the unused value between
+    # SCAFFOLD and the ghost overlay) stays in the list so imshow's
+    # index is the code, not a packed rank.
+    slots = ["#000000"] * (max(_COLORS) + 1)
+    for code, color in _COLORS.items():
+        slots[code] = color
+    cmap = ListedColormap(slots)
 
     fig, ax = plt.subplots(figsize=(6, 4.5))
     ax.set_axis_off()

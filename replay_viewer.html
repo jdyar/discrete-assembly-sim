@@ -62,6 +62,7 @@
   .vox  { color: #60a5fa; } .ghost { color: #94a3b8; }
   .bot  { color: #f97316; } .gnd   { color: #6b7280; }
   .bad  { color: #ef4444; }
+  .scf  { color: #f5c518; }
   .needs-structure, .is-hidden { display: none !important; }
   #colorWrap, #deformWrap {
     display: flex; align-items: center; gap: 6px; color: #94a3b8;
@@ -133,6 +134,7 @@
   <span id="cageKey" class="needs-structure"><b style="color:#fff">□</b> worst sag</span>
   <span id="legend">
     <b class="vox">■</b> voxel&nbsp; <b class="bad">■</b> defect&nbsp;
+    <b class="scf">■</b> scaffold&nbsp;
     <b class="ghost">□</b> blueprint&nbsp;
     <b class="bot">■</b> robot&nbsp; <b class="gnd">■</b> ground&nbsp;
     · space = play/pause, ←/→ = step, drag = orbit, wheel = zoom
@@ -216,6 +218,9 @@ resize();
 const matGround = new THREE.MeshStandardMaterial({ color: 0x4b5563, roughness: 0.9 });
 const matVoxel  = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.55 });
 const matDefect = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5, emissive: 0x450a0a });
+/* Temporary support. Stays this color in every color mode, including
+   displacement, so a scaffold post is not painted with the strain ramp. */
+const matScaffold = new THREE.MeshStandardMaterial({ color: 0xf5c518, roughness: 0.45 });
 const matGhost  = new THREE.MeshStandardMaterial({ color: 0x93c5fd, transparent: true, opacity: 0.16 });
 /* One color per robot id (multi-robot runs, contract v2). */
 const ROBOT_COLORS = [0xf97316, 0xa855f7, 0x10b981, 0xeab308, 0xec4899, 0x14b8a6];
@@ -678,12 +683,18 @@ function frameContent(data) {
   if (!viewParams.has("phi")) orbit.phi = 1.22;
 }
 
+function isScaffold(v) {
+  return legend.SCAFFOLD !== undefined && v === legend.SCAFFOLD;
+}
+function isPermanentSolid(v) {
+  return v === legend.VOXEL || (legend.DEFECT !== undefined && v === legend.DEFECT);
+}
 function supportMesh(node, occ) {
   if (!node || node.length !== 3 || node[0] < 0) return null;
   if (node[0] >= occ.length) return null;
   const v = occAt(occ, node);
   if (v === legend.GROUND) return groundAt.get(node.join(",")) || null;
-  if (v === legend.VOXEL || (legend.DEFECT !== undefined && v === legend.DEFECT)) {
+  if (isPermanentSolid(v) || isScaffold(v)) {
     return cells.get(node.join(",")) || null;
   }
   return null;
@@ -781,13 +792,15 @@ function setFrame(i) {
   for (const [key, mesh] of cells) {
     const n = key.split(",").map(Number);
     const v = occAt(occ, n);
-    const solid = v === legend.VOXEL || (legend.DEFECT !== undefined && v === legend.DEFECT);
+    const scaffold = isScaffold(v);
+    const solid = isPermanentSolid(v) || scaffold;
     mesh.position.copy(mesh.userData.rest);
     mesh.scale.setScalar(1);
     if (solid) {
       mesh.visible = true;
-      const rgb = colorFor(key, mode, held);
+      const rgb = scaffold ? null : colorFor(key, mode, held);
       if (rgb) paint(mesh, rgb);
+      else if (scaffold) mesh.material = matScaffold;
       else mesh.material = (v === legend.DEFECT) ? matDefect : matVoxel;
       const rec = {
         x: mesh.userData.rest.x, y: mesh.userData.rest.y, z: mesh.userData.rest.z,
@@ -843,7 +856,7 @@ function setFrame(i) {
     if (cell) {
       const mesh = cells.get(cell.join(","));
       const v = occAt(occ, cell);
-      const solid = v === legend.VOXEL || (legend.DEFECT !== undefined && v === legend.DEFECT);
+      const solid = isPermanentSolid(v) || isScaffold(v);
       if (mesh && solid) {
         highlight.position.copy(mesh.position);
         highlight.visible = true;

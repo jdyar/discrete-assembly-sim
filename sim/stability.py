@@ -205,9 +205,34 @@ from typing import Iterable, NamedTuple
 
 import numpy as np
 
-from .world import DEFECT, VOXEL
+from .world import DEFECT, SCAFFOLD, VOXEL
 
 Cell = tuple[int, ...]
+
+
+class SagCap(NamedTuple):
+    """Optional displacement cap, in the units of :func:`estimate_sag`.
+
+    ``max_sag`` is compared to ``worst_sag``. With the defaults
+    ``k = mass = g = 1`` that number is in units of ``mass·g/k``.
+    Those defaults are not a stiffness fit. Pass a cap only from a
+    caller that has opted into the structural model; ``None`` in place
+    of a cap leaves the check off.
+
+    A singular partial build (no path of springs to the base) fails the
+    cap. The comparison allows a tiny absolute tolerance so a finished
+    structure used as its own cap still passes.
+    """
+
+    max_sag: float
+    k: float = 1.0
+    mass: float = 1.0
+    g: float = 1.0
+
+
+# Absolute tolerance on worst_sag. The solver is dense float64; a cap
+# copied from a finished-structure sag must still accept that sag.
+SAG_ATOL = 1e-9
 
 
 class StabilityPolicy(NamedTuple):
@@ -326,7 +351,11 @@ def occupied_voxels(world) -> tuple[Cell, ...]:
     robot removes it. Order is numpy's C-order scan, which is stable
     for a given occupancy array.
     """
-    mask = (world.occupancy == VOXEL) | (world.occupancy == DEFECT)
+    mask = (
+        (world.occupancy == VOXEL)
+        | (world.occupancy == DEFECT)
+        | (world.occupancy == SCAFFOLD)
+    )
     found = np.argwhere(mask)
     return tuple(tuple(int(v) for v in row) for row in found)
 
@@ -477,6 +506,34 @@ def necessary_stability_precheck(
         int(worst),
         limit,
     )
+
+
+def sag_within(
+    occupied_cells: Iterable,
+    policy: StabilityPolicy | None = None,
+    cap: SagCap | None = None,
+    **frame,
+) -> bool:
+    """Whether ``worst_sag`` is within ``cap``.
+
+    ``cap is None`` accepts everything (the check is off). A
+    :class:`ValueError` from :func:`estimate_sag` — nothing tied to the
+    base — is a failure, not a number. Empty input passes.
+    """
+    if cap is None:
+        return True
+    try:
+        estimate = estimate_sag(
+            occupied_cells,
+            policy,
+            k=cap.k,
+            mass=cap.mass,
+            g=cap.g,
+            **frame,
+        )
+    except ValueError:
+        return False
+    return float(estimate.worst_sag) <= float(cap.max_sag) + SAG_ATOL
 
 
 def estimate_sag(

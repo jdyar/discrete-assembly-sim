@@ -42,8 +42,16 @@ from typing import Hashable, Iterable, NamedTuple
 from .geometry import Geometry, bfs_path
 from .planner import SearchBudgetExceeded, plan_build_order
 from .reservations import OwnerId, ReservationConflict, ReservationTable
-from .stability import StabilityPolicy, is_stable, occupied_voxels, robot_stance_ok
+from .stability import (
+    SagCap,
+    StabilityPolicy,
+    is_stable,
+    occupied_voxels,
+    robot_stance_ok,
+    sag_within,
+)
 from .texgraph import TENode, TimeExpandedGraph
+from .world import EMPTY
 
 Node = Hashable
 
@@ -104,12 +112,30 @@ def cooperative_astar(
     """
     if not goals:
         return None
+    # A goal whose reservation keys are already a static obstacle can
+    # never be entered on this plan. Dropping those goals first keeps
+    # the same answer and skips a horizon-long search.
+    goals = {
+        goal
+        for goal in goals
+        if all(key not in graph._blocked for key in graph._reservation_keys(goal))
+    }
+    if not goals:
+        return None
     geom = graph.geometry
     res = graph.reservations
     owner = graph.owner
 
     def h(node: Node) -> int:
-        return min(geom.heuristic_distance(node, g) for g in goals)
+        # Same value at every tick of a node. One search asks for it
+        # once per time-expanded state, and a removal goal set is large.
+        hit = h_cache.get(node)
+        if hit is None:
+            hit = min(geom.heuristic_distance(node, g) for g in goals)
+            h_cache[node] = hit
+        return hit
+
+    h_cache: dict = {}
 
     def at_goal(state: TENode) -> bool:
         if state.node not in goals:
@@ -233,6 +259,7 @@ def stability_gate(
     proposed_target: Node,
     policy: StabilityPolicy,
     approach: Node | None = None,
+    sag: SagCap | None = None,
 ) -> bool:
     """May ``proposed_target`` be placed without an unstable partial build?
 
@@ -254,6 +281,12 @@ def stability_gate(
     The carried voxel is included on the structure the robot is
     standing on (before the new block is material) and omitted after
     the block is in the build, so its weight is not counted twice.
+
+    ``sag``, when given, also refuses a prefix whose worst downward
+    displacement exceeds the cap. That number is
+    :func:`~sim.stability.estimate_sag`'s, in ``mass·g/k`` at the cap's
+    stiffness (the default ``k = 1`` is not a fit). ``None`` accepts
+    every prefix.
     """
     cells = set(occupied_voxels(geometry.world))
     target = tuple(int(coord) for coord in proposed_target)
@@ -265,6 +298,8 @@ def stability_gate(
         return False
     cells.add(target)
     if not is_stable(cells, policy):
+        return False
+    if not sag_within(cells, policy, sag):
         return False
     if feet and not robot_stance_ok(
         cells, feet, policy, carrying=False, **params
@@ -348,6 +383,8 @@ def plan_task(
     static_obstacles: frozenset | set = frozenset(),
     remaining_cells: Iterable[Node] = (),
     stability: StabilityPolicy | None = None,
+    sag: SagCap | None = None,
+    check_buildability: bool = True,
 ) -> TaskPlan | None:
     """Plan and RESERVE one full task: pos -> depot, PICK, -> stance,
     PLACE (deed), INSPECT + spare REMOVE slot.
@@ -356,8 +393,11 @@ def plan_task(
     per leg and rolled back wholesale (release_owner from t_now+1) if any
     reservation unexpectedly conflicts. Returns None — with the table
     unchanged from this attempt — when a leg is unplannable, the stance
-    set is empty, or a gate refuses the placement. ``stability``, when
+    set is empty, or a gate refuses the placement.     ``stability``, when
     given, is the structural gate; leave it ``None`` to skip that gate.
+    ``check_buildability=False`` skips the order re-search. A scripted
+    scaffold run already proved an order and only needs connectivity
+    plus the structural caps on the cell being committed.
 
     ``anchors`` are the other robots' committed end positions; this
     robot's own escape is checked from the chosen stance.
@@ -396,10 +436,12 @@ def plan_task(
     ):
         return None
     if stability is not None and not stability_gate(
-        geometry, target, stability, approach=approach
+        geometry, target, stability, approach=approach, sag=sag
     ):
         return None
-    if not buildability_gate(geometry, table, target, remaining_cells, depot):
+    if check_buildability and not buildability_gate(
+        geometry, table, target, remaining_cells, depot
+    ):
         return None
 
     # Commit: leases for both legs, action holds, the deed, and a trailing
@@ -427,6 +469,103 @@ def plan_task(
     if inspect_enabled:
         steps.append(Step(t_place + 1, approach, INSPECT, target))
     return TaskPlan(steps, target, approach, t_place, t_end)
+
+
+def removal_keeps_paths(
+    geometry: Geometry,
+    target: Node,
+    anchors: Iterable[Node],
+    depot: Node,
+) -> bool:
+    """After ``target`` is emptied, every anchor still reaches the depot.
+
+    The live world still holds the voxel. The check runs on a copy with
+    that cell empty, so a robot whose only footing was the scaffold is
+    refused. An anchor sitting in the cell being removed is refused too.
+    """
+    clone = geometry.world.copy()
+    clone.occupancy[target] = EMPTY
+    future = geometry.bound_factory()(clone)
+    for anchor in anchors:
+        if anchor == target:
+            return False
+        if not future.is_footing(anchor) and anchor != depot:
+            return False
+        if bfs_path(future, anchor, {depot}) is None:
+            return False
+    return True
+
+
+def plan_remove_task(
+    owner: OwnerId,
+    pos: Node,
+    t_now: int,
+    target: Node,
+    stances: list,
+    geometry: Geometry,
+    table: ReservationTable,
+    depot: Node,
+    anchors: Iterable[Node],
+    static_obstacles: frozenset | set = frozenset(),
+    stability: StabilityPolicy | None = None,
+    sag: SagCap | None = None,
+) -> TaskPlan | None:
+    """Plan and reserve a scaffold removal: walk to a stance, REMOVE.
+
+    No depot trip and no deed — the block is already there and is
+    leaving. The post-removal structure must pass ``stability`` and
+    ``sag`` when those are set, and every anchor, including the chosen
+    stance, must still reach the depot after the cell is empty.
+    """
+    if not stances:
+        return None
+    cell = tuple(int(coord) for coord in target)
+    remaining = set(occupied_voxels(geometry.world))
+    remaining.discard(cell)
+    if stability is not None and not is_stable(remaining, stability):
+        return None
+    if sag is not None and not sag_within(remaining, stability, sag):
+        return None
+
+    graph = TimeExpandedGraph(geometry, table, owner, static_obstacles)
+    anchor_list = list(anchors)
+    open_stances = set(stances)
+    chosen_leg = None
+    approach = None
+    while open_stances:
+        leg = cooperative_astar(
+            graph, pos, t_now, open_stances, extra_free_ticks=2
+        )
+        if leg is None:
+            return None
+        stance = leg[-1].node
+        if removal_keeps_paths(geometry, target, anchor_list + [stance], depot):
+            chosen_leg = leg
+            approach = stance
+            break
+        open_stances.discard(stance)
+    if chosen_leg is None or approach is None:
+        return None
+
+    t_remove = chosen_leg[-1].t + 1
+    try:
+        _reserve_leg(owner, chosen_leg, table, geometry)
+        pin_pose(table, geometry, owner, approach, t_remove, t_remove + 1)
+    except ReservationConflict:
+        table.release_owner(owner, t_now + 1)
+        return None
+    pin_pose(
+        table,
+        geometry,
+        owner,
+        approach,
+        t_remove + 2,
+        t_remove + PARK_TICKS,
+        best_effort=True,
+    )
+    steps = _path_to_steps(chosen_leg)
+    steps.append(Step(t_remove, approach, REMOVE, target))
+    return TaskPlan(steps, target, approach, t_remove, t_remove)
 
 
 def plan_walk(

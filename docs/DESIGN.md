@@ -79,6 +79,20 @@ passes. §6.1–§6.5 of the whitepaper were not run with the gate on.
 §6.6 is the measurement (`python main.py stability`), and the
 stiffness in that run is the unfitted default k = 1.
 
+When the finished blueprint passes those caps and no reachable order
+does, `plan_with_scaffold` (`sim/scaffold.py`) adds the smallest set of
+temporary supports in the column under the blueprint, builds with them,
+and removes them in an order that stays inside the same caps. Scaffold
+is solid, so a robot can walk on it, and it is not a blueprint cell.
+The search minimizes the count, then a single-robot travel score.
+The swarm tick count is a separate measurement (`python main.py
+scaffold`). That campaign's inchworm is `OnLatticeGeometry` with the
+on-lattice gait, entering from a planted level-1 pad that is not under
+the deck. The crane walks the unmodified bridge. A finished structure that already fails the caps is not
+rescued. Sag in that cap is `worst_sag` at k = mass = g = 1, units of
+mass·g/k, stiffness not fit. This is not the ant-colony / FEM scaffold
+search in the Ozo thesis (WHITEPAPER §8); that PDF is embargoed.
+
 The same estimate can be written into the run log. A `StructureLog`
 attached to a `RunLog` is off by default; without it, frames are
 unchanged. When it is set, each sampled occupancy change — a placement

@@ -465,14 +465,15 @@ class CuboctahedralLattice3D(CubicLattice3D):
 
     def bound_factory(self):
         motion = self.motion
-        return lambda world: CuboctahedralLattice3D(world, motion)
+        yard = self.yard
+        return lambda world: CuboctahedralLattice3D(world, motion, yard)
 
     def future_view(self, solid_nodes) -> "CuboctahedralLattice3D":
         clone = self.world.copy()
         for node in solid_nodes:
             if clone.occupancy[node] == EMPTY:
                 clone.occupancy[node] = VOXEL
-        return CuboctahedralLattice3D(clone, self.motion)
+        return CuboctahedralLattice3D(clone, self.motion, self.yard)
 
     def stability_policy(self, max_cantilever: int | None = 0):
         """Same frame as the cubic lattice: ``+level`` up, level 0 is the plate.

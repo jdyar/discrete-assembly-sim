@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .world import DEFECT, EMPTY, GROUND, VOXEL
+from .world import DEFECT, EMPTY, GROUND, SCAFFOLD, VOXEL
 
 Cell3 = tuple[int, int, int]  # (level, row, col)
 
@@ -77,18 +77,29 @@ class World3D:
     def is_empty(self, cell: Cell3) -> bool:
         return self.occupancy[cell] == EMPTY
 
-    def place_voxel(self, cell: Cell3, defective: bool = False) -> None:
-        """Put a voxel in an empty cell. Raises if the cell is taken."""
+    def place_voxel(
+        self, cell: Cell3, defective: bool = False, scaffold: bool = False
+    ) -> None:
+        """Put a voxel in an empty cell. Raises if the cell is taken.
+
+        ``scaffold=True`` writes a temporary support (:data:`~sim.world.SCAFFOLD`).
+        Scaffold is solid and load-bearing, and it is not a blueprint cell.
+        """
+        if defective and scaffold:
+            raise ValueError("a scaffold voxel is not a defective permanent voxel")
         if not self.is_empty(cell):
             raise ValueError(f"cell {cell} is not empty")
-        self.occupancy[cell] = DEFECT if defective else VOXEL
+        if scaffold:
+            self.occupancy[cell] = SCAFFOLD
+        else:
+            self.occupancy[cell] = DEFECT if defective else VOXEL
 
     def is_defective(self, cell: Cell3) -> bool:
         return self.occupancy[cell] == DEFECT
 
     def remove_voxel(self, cell: Cell3) -> None:
-        """Take a voxel (good or defective) back out of the lattice."""
-        if self.occupancy[cell] not in (VOXEL, DEFECT):
+        """Take a voxel (good, defective, or scaffold) back out of the lattice."""
+        if self.occupancy[cell] not in (VOXEL, DEFECT, SCAFFOLD):
             raise ValueError(f"cell {cell} holds no voxel")
         self.occupancy[cell] = EMPTY
 

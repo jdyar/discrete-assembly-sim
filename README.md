@@ -18,11 +18,12 @@ git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-asse
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m unittest                 # 187 tests
+python -m unittest                 # 197 tests
 python main.py bridge              # 1 robot, gate on, strain log -> runs/bridge.json
 python main.py cuboct              # 2×2×2 cuboctahedra -> runs/cuboct.json
 python main.py stability          # 312-trial gate campaign -> docs/stability_cost.csv
 python main.py onlattice          # crane vs on-lattice, with robot weight -> docs/on_lattice.csv
+python main.py scaffold           # temporary supports -> docs/scaffold_campaign.csv
 ```
 
 Open `replay_viewer.html` and drop `runs/bridge.json` on it (or serve the repo root with `python -m http.server` and it loads `runs/latest.json`). Displacement color and a marker on the worst-sag cell appear only when the log has samples. The blocks are drawn on the cells where they were placed. An exaggerate slider, off until you move it, redraws the longest arrow as a fraction of the voxel pitch. `pip install git+https://github.com/jdyar/discrete-assembly-sim.git` then `import sim` prints **0.1.0** until the tag.
@@ -51,11 +52,12 @@ The gate and the sag solver stay out of the planner unless a caller passes a `St
 - **Gate campaign.** `python main.py stability`, 312 trials, raw rows in [`docs/stability_cost.csv`](docs/stability_cost.csv). Summary in the next section. `k = 1`.
 - **Cuboctahedral voxels** (`sim/cuboct.py`, `python main.py cuboct`). Optional. Same six face-neighbors and the same lumped springs, so the closed forms still hold. Twelve vertices at the edge midpoints of the bounding cube, and four joint sites at the corners of the shared square. The cubic solid stays the default. Geometry only: not a calibrated model of the ARMADAS voxel ([Gregg et al. 2024](https://doi.org/10.1126/scirobotics.adi2746)).
 - **Stability precheck.** Before the order search, overhang in the *finished* structure lower-bounds every prefix. A blueprint that already fails the cantilever limit is rejected without spending the node budget. The screen does not reject a blueprint the search could return.
+- **Temporary scaffold.** When the finished blueprint passes the caps and no reachable order does, the planner adds the smallest set of support voxels in the column under the blueprint, builds with them, and removes them in an order that stays inside the same caps. Robots, including the on-lattice inchworm, can walk on scaffold. The search minimizes the count, then a single-robot travel score. The swarm tick count is measured separately. `k = 1` is not a fit. `python main.py scaffold` writes [`docs/scaffold_campaign.csv`](docs/scaffold_campaign.csv). The long form is [WHITEPAPER.md](WHITEPAPER.md) §4.4 and §6.8.
 
 - **On-lattice inchworm** (`sim/inchworm.py`). Opt-in. The default robot still stands in an empty cell. The inchworm grips two voxel faces, steps one foot at a time, and places a voxel on a face it can reach from that stance. Stride, span, place reach, and which faces are walkable are configuration; the module docstring says which of those numbers are in the BILL-E and SOLL-E papers and which are not. Robot weight is a point load at the foot voxels, also off unless a caller sets a mass.
 - **That comparison** (`python main.py onlattice`, 108 trials, `docs/on_lattice.csv`). Numbers in the next section. `k = 1`.
 
-187 tests cover the traps, the 3D repair loop, fuzz, the examples, the screen, the precheck, the strain log, the bridge span, a smoke run of each campaign, the cuboct solid, the gait, and the tip point-load closed form `P·n/k_shear`.
+197 tests cover the traps, the 3D repair loop, fuzz, the examples, the screen, the precheck, the strain log, the bridge span, a smoke run of each campaign, the cuboct solid, the gait, the tip point-load closed form `P·n/k_shear`, and scaffold insertion and removal.
 
 ## Results
 
@@ -101,6 +103,10 @@ On the cantilever and the tower the gates do not change the order cells are plac
 The still is the cantilever at ratio 3, both feet on adjacent top faces, displacement color including the robot. The blocks are drawn where they were placed. `docs/on_lattice_sag.png` is the same frame with the longest arrow at 0.20 of a voxel pitch (exaggerated and normalized; the slider stops at 0.40). The feet sit on the faces that were drawn.
 
 ![Inchworm on the arm. Both feet are on top faces. Color is the spring model with the robot's weight included. k = 1.](docs/on_lattice_demo.png)
+**Scaffold, spans 4–8.** Caps are the finished structure's own overhang and its sag at `k = 1` (mass·g/k, not a fit). The inchworm is the on-lattice gait from the section above, entering on a planted pad that is not under the deck. 90 trials, 88 completed with no scaffold left. Two seeds hit the 4000-tick cap. The crane needs no scaffold. The inchworm needs three level-1 cells under the span-4 deck and two under spans 5–8. The ratio in that table is a robot count, not the mass ratio above. Table: [WHITEPAPER.md](WHITEPAPER.md) §6.8 and [`docs/scaffold_campaign.csv`](docs/scaffold_campaign.csv).
+
+![Span-5 inchworm, yellow scaffold under the blue deck, material color, true geometry.](docs/scaffold_standing.png)
+
 
 Coordination results from before the gate, regenerated with the gate off, are in the whitepaper §6.1–§6.5 and the charts under `docs/`: a 2D wall gives no speedup (406 ticks at one robot and at two); a 40-voxel hollow box goes from 472 ticks at one robot to ×2.81 at five, and a 96-voxel box reaches ×4.07 at five; corrected yield holds 100% at the tested defect rates, and uncorrected swarms jam (about 15% at p=0.08 in the 3D swarm chart) instead of following (1−p).
 
@@ -116,15 +122,17 @@ Coordination results from before the gate, regenerated with the gate off, are in
 ## Layout
 
 ```
-main.py                 # demos and experiments (bridge, cuboct, stability, onlattice, ...)
+main.py                 # demos and experiments (bridge, cuboct, stability, onlattice, scaffold, ...)
 sim/inchworm.py         # opt-in on-lattice gait; off unless a caller builds it
 sim/stability.py        # gate, sag solver, closed forms, point loads, precheck
+sim/scaffold.py         # minimal temporary supports, then a stable removal
 sim/cuboct.py           # optional cuboctahedron on the cubic grid
 sim/planner.py          # build-order search; calls the precheck when asked
 replay_viewer.html      # drop a log; colors strain when the log has it
 scripts/render_demo.py  # ~60 s Playwright + ffmpeg capture
 docs/VALIDATION.md      # print plan and empty results log
 docs/stability_cost.csv # 312-trial gate campaign
+docs/scaffold_campaign.csv # spans 4–8, crane and inchworm, 90 trials
 WHITEPAPER.md           # citable technical account
 CHANGELOG.md            # v0.2.0 unreleased
 ```

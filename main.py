@@ -13,6 +13,8 @@ log goes to runs/latest.json for the replay viewer.
     python main.py cuboct     # optional cuboctahedral voxels -> runs/cuboct.json
     python main.py stability # gate cost/effect campaign -> docs/stability_cost.*
     python main.py stability smoke
+    python main.py onlattice  # on-lattice inchworm + weight -> docs/on_lattice.*
+    python main.py scaffold   # temporary supports -> docs/scaffold_campaign.*
 """
 
 from __future__ import annotations
@@ -620,6 +622,11 @@ def main() -> None:
         from experiments.on_lattice import main as onlattice_main
 
         onlattice_main(sys.argv[2:])
+        return
+    elif mode == "scaffold":
+        from experiments.scaffold_campaign import main as scaffold_main
+
+        scaffold_main(sys.argv[2:])
         return
     elif mode == "swarm":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 2
