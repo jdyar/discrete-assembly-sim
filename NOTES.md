@@ -404,7 +404,7 @@ scenarios. Spans 7 and 8 under the stepper (reach 1, climb 1) stop at
 the 8000-tick cap. The crane motion finishes span 8 with scaffold
 count 0. The unit tests run the nine-task smoke set, not the full
 bench. Submission notes for ARMADAS, MIT CBA, and TU Delft are in
-`docs/BENCHMARKS.md`. No learned planner is loaded.
+`docs/BENCHMARKS.md`. The bench command scores the stock planner already in the repository.
 
 ## Slice 1 invariants (tested)
 
