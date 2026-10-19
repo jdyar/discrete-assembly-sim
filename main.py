@@ -23,6 +23,8 @@ log goes to runs/latest.json for the replay viewer.
     python main.py precision smoke
     python main.py faults     # seeded fault injection -> docs/fault_campaign.csv
     python main.py faults smoke
+    python main.py bench      # public suite -> benchmarks/results.csv
+    python main.py bench smoke
 """
 
 from __future__ import annotations
@@ -645,6 +647,11 @@ def main() -> None:
         from experiments.joint_limits import main as joints_main
 
         joints_main(sys.argv[2:])
+        return
+    elif mode == "bench":
+        from sim.bench import main as bench_main
+
+        bench_main(sys.argv[2:])
         return
     elif mode == "precision":
         from experiments.precision_campaign import main as precision_main

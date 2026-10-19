@@ -1,0 +1,560 @@
+{
+  "format": "discrete-assembly",
+  "format_version": "1.0.0",
+  "kind": "scenario",
+  "id": "scaffold-span-4-inchworm",
+  "title": "Scaffold search, span 4, inchworm",
+  "family": "scaffold",
+  "blueprint": {
+    "format": "discrete-assembly",
+    "format_version": "1.0.0",
+    "kind": "blueprint",
+    "id": "scaffold-span-4-inchworm.blueprint",
+    "lattice": {
+      "type": "cubic",
+      "pitch": 1.0,
+      "dimensions": {
+        "levels": 4,
+        "rows": 7,
+        "cols": 12
+      },
+      "up_axis": 0,
+      "up_sign": 1,
+      "ground_plane": 0
+    },
+    "cells": [
+      {
+        "index": [
+          1,
+          0,
+          0
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          0,
+          1
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          0,
+          2
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          0,
+          3
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          1,
+          0
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          1,
+          1
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          1,
+          2
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          1,
+          3
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          2,
+          0
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          2,
+          1
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          2,
+          2
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          2,
+          3
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          1,
+          2,
+          7
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          1,
+          3,
+          0
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          3,
+          1
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          3,
+          2
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          3,
+          3
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          4,
+          0
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          4,
+          1
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          4,
+          2
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          4,
+          3
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          5,
+          0
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          5,
+          1
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          5,
+          2
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          5,
+          3
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          6,
+          0
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          6,
+          1
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          6,
+          2
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          1,
+          6,
+          3
+        ],
+        "voxel_type": "seed"
+      },
+      {
+        "index": [
+          2,
+          2,
+          3
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          2,
+          4
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          2,
+          5
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          2,
+          6
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          2,
+          7
+        ],
+        "voxel_type": "structural"
+      }
+    ],
+    "seed": [
+      [
+        1,
+        0,
+        0
+      ],
+      [
+        1,
+        0,
+        1
+      ],
+      [
+        1,
+        0,
+        2
+      ],
+      [
+        1,
+        0,
+        3
+      ],
+      [
+        1,
+        1,
+        0
+      ],
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        2
+      ],
+      [
+        1,
+        1,
+        3
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        1
+      ],
+      [
+        1,
+        2,
+        2
+      ],
+      [
+        1,
+        3,
+        0
+      ],
+      [
+        1,
+        3,
+        1
+      ],
+      [
+        1,
+        3,
+        2
+      ],
+      [
+        1,
+        3,
+        3
+      ],
+      [
+        1,
+        4,
+        0
+      ],
+      [
+        1,
+        4,
+        1
+      ],
+      [
+        1,
+        4,
+        2
+      ],
+      [
+        1,
+        4,
+        3
+      ],
+      [
+        1,
+        5,
+        0
+      ],
+      [
+        1,
+        5,
+        1
+      ],
+      [
+        1,
+        5,
+        2
+      ],
+      [
+        1,
+        5,
+        3
+      ],
+      [
+        1,
+        6,
+        0
+      ],
+      [
+        1,
+        6,
+        1
+      ],
+      [
+        1,
+        6,
+        2
+      ],
+      [
+        1,
+        6,
+        3
+      ]
+    ],
+    "supports": [],
+    "model": {
+      "k": 1.0,
+      "mass": 1.0,
+      "g": 1.0,
+      "fitted": false,
+      "displacement_units": "mass*g/k",
+      "force_units": "mass*g",
+      "note": "k = 1 is not a fit. Displacement is in model units of mass*g/k, not a measured sag. Stiffness has not been fit to a printed specimen."
+    },
+    "title": "Scaffold search, span 4, inchworm",
+    "meta": {
+      "source": "experiments.scaffold_campaign",
+      "span": 4,
+      "gait": "inchworm",
+      "note": "Seed cells are the planted entry pad. They are not scaffold and they do not sit under the deck."
+    }
+  },
+  "robots": {
+    "format": "discrete-assembly",
+    "format_version": "1.0.0",
+    "kind": "robots",
+    "id": "scaffold-span-4-inchworm.robots",
+    "robots": [
+      {
+        "id": "r0",
+        "role": "inchworm",
+        "locomotion": "inchworm",
+        "gait": {
+          "stride": 1,
+          "span": 2.0,
+          "place_reach": 1,
+          "allow_top": true,
+          "allow_sides": true,
+          "allow_inverted": false,
+          "allow_flat": true,
+          "allow_convex": true,
+          "allow_concave": true
+        },
+        "depot": {
+          "feet": [
+            {
+              "cell": [
+                1,
+                0,
+                0
+              ],
+              "normal": [
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "cell": [
+                1,
+                1,
+                0
+              ],
+              "normal": [
+                1,
+                0,
+                0
+              ]
+            }
+          ]
+        },
+        "start": {
+          "feet": [
+            {
+              "cell": [
+                1,
+                2,
+                2
+              ],
+              "normal": [
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "cell": [
+                1,
+                3,
+                2
+              ],
+              "normal": [
+                1,
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "roles": {
+      "inchworm": {
+        "description": "On-lattice gait: stride 1, span 2, place reach 1, top and side faces. Configuration, not a BILL-E or SOLL-E joint trajectory.",
+        "mass": 0.0,
+        "carried_mass": 0.0
+      }
+    },
+    "defect_p": 0.0,
+    "inspect": true,
+    "rng_seed": 0
+  },
+  "task": {
+    "runner": "scaffold",
+    "gate": "finished",
+    "scaffold": "minimal",
+    "n_robots": 1,
+    "max_ticks": 4000,
+    "max_nodes": 40000,
+    "span": 4,
+    "rng_seed": 0
+  },
+  "notes": "k = mass = g = 1. Displacement is mass*g/k and force is mass*g. Stiffness has not been fit to a printed specimen. k = 1 is not a fit. Displacement is in model units of mass*g/k, not a measured sag. Stiffness has not been fit to a printed specimen. The inchworm cannot walk the floor to the far pier. The search adds the smallest support set under the blueprint, builds, and removes it inside the finished caps.",
+  "meta": {
+    "source": "experiments.scaffold_campaign",
+    "span": 4,
+    "gait": "inchworm"
+  }
+}

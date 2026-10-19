@@ -12,7 +12,7 @@ git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-asse
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt  # numpy + matplotlib, nothing else
-python -m unittest               # 271 tests — all green before and after your change
+python -m unittest               # 365 tests — all green before and after your change
 ```
 
 No build step, no linter config to fight. Python 3.10+.

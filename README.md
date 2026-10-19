@@ -18,7 +18,8 @@ git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-asse
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m unittest                 # 271 tests
+python -m unittest                 # 365 tests
+python main.py bench               # 21 public tasks -> benchmarks/results.csv
 python main.py bridge              # 1 robot, gate on, strain log -> runs/bridge.json
 python main.py cuboct              # 2×2×2 cuboctahedra -> runs/cuboct.json
 python main.py stability          # 312-trial gate campaign -> docs/stability_cost.csv
@@ -60,6 +61,7 @@ The gate and the sag solver stay out of the planner unless a caller passes a `St
 - **Joint strength.** Each face spring can carry a compression, tension, shear, and optional moment capacity beside its stiffness. The load is the spring force from the same solve, in units of `mass·g` at `k = 1`. A `JointCap` rejects an order where any joint exceeds capacity times a safety factor. The published 3×3×3 cube gives a derived face compression of 1057.2365952 N; that number is not applied to a `k = 1` row. `python main.py joints` writes which builds are shear-limited, compression-limited, or both, and that a cap at the finished demand does not add scaffold. The PLA cantilever table stays `PENDING` and measures `k_shear` only. Joint strength from a connector print is a separate `PENDING` hook in [`docs/VALIDATION.md`](docs/VALIDATION.md). Long form: [WHITEPAPER.md](WHITEPAPER.md) §3.5 and §6.10.
 - **Placement error.** Opt-in (`sim/precision.py`). A new voxel draws a position and one angle, default uniform inside the ARMADAS requirement of ±1.78 cm and ±3°. That box is a requirement, not a measured histogram. Inside the ski and claw envelopes the joint snaps to the elastic average of the mating faces. Outside them the placement fails and the existing defect path removes it. `k` is not an input. `python main.py precision` writes [`docs/precision_campaign.csv`](docs/precision_campaign.csv). Long form: [WHITEPAPER.md](WHITEPAPER.md) §3.6 and §6.11.
 - **Fault injection.** Opt-in (`sim/faults.py`). Six channels at a configured probability: capture miss, dropped voxel, stall, robot failure, failed fastener, feed outage. The probability is an input, not a measurement. Recovery is the existing re-place / re-route / reassign path, with scaffold only when the plain order is gone. Gates stay on. `python main.py faults` writes [`docs/fault_campaign.csv`](docs/fault_campaign.csv). Long form: [WHITEPAPER.md](WHITEPAPER.md) §3.7 and §6.12. `k = 1`.
+- **Shared scenarios.** Format `discrete-assembly` 1.0.0 ([docs/FORMAT.md](docs/FORMAT.md)): a blueprint (lattice, pitch, cells, seed, supports), a robot document, and an event log of placements, faults, recoveries, and gate verdicts. `python main.py bench` scores the stock planner on 21 tasks and writes [`benchmarks/results.csv`](benchmarks/results.csv). `k = mass = g = 1`. Sag is `mass·g/k`. Stiffness is not a fit. How another lab submits a planner is [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 - **On-lattice inchworm** (`sim/inchworm.py`). Opt-in. The default robot still stands in an empty cell. The inchworm grips two voxel faces, steps one foot at a time, and places a voxel on a face it can reach from that stance. Stride, span, place reach, and which faces are walkable are configuration; the module docstring says which of those numbers are in the BILL-E and SOLL-E papers and which are not. Robot weight is a point load at the foot voxels, also off unless a caller sets a mass.
 - **That comparison** (`python main.py onlattice`, 108 trials, `docs/on_lattice.csv`). Numbers in the next section. `k = 1`.
@@ -136,7 +138,11 @@ Coordination results from before the gate, regenerated with the gate off, are in
 ## Layout
 
 ```
-main.py                 # demos and experiments (bridge, cuboct, stability, onlattice, scaffold, precision, ...)
+main.py                 # demos and experiments (bridge, cuboct, stability, onlattice, scaffold, bench, ...)
+benchmarks/             # 21 scenario documents and the stock results table
+schemas/                # discrete-assembly 1.0.0 JSON Schema
+docs/FORMAT.md          # interchange: blueprint, robots, event log
+docs/BENCHMARKS.md      # metric definitions and the stock table
 sim/precision.py        # opt-in placement error and ski/claw capture; k is not an input
 sim/inchworm.py         # opt-in on-lattice gait; off unless a caller builds it
 sim/stability.py        # gate, sag solver, closed forms, point loads, precheck

@@ -1,0 +1,28 @@
+{
+  "format": "discrete-assembly",
+  "format_version": "1.0.0",
+  "description": "Public benchmark suite. k = mass = g = 1 on every task. That stiffness is not a fit. Run with: python main.py bench",
+  "tasks": [
+    "wall-2d",
+    "wall-3d",
+    "hollow-box",
+    "hollow-roof-limit-0",
+    "cuboct-block",
+    "bridge-span-4",
+    "bridge-span-5",
+    "bridge-span-6",
+    "bridge-span-7",
+    "bridge-span-8",
+    "cantilever-3",
+    "cantilever-4",
+    "cantilever-arm",
+    "tower",
+    "onlattice-bridge",
+    "armadas-shelter",
+    "scaffold-span-4-crane",
+    "scaffold-span-4-inchworm",
+    "scaffold-span-8-crane",
+    "fault-wall",
+    "fault-tower"
+  ]
+}

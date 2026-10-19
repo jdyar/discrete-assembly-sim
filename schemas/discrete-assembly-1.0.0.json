@@ -1,0 +1,416 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jdyar/discrete-assembly-sim/schemas/discrete-assembly-1.0.0.json",
+  "title": "Discrete assembly interchange 1.0.0",
+  "description": "Versioned documents for a lattice blueprint, a robot and role configuration, an event log, and a scenario that binds them. Pitch and stiffness in the public suite are model units. k = 1 is not a fit.",
+  "oneOf": [
+    {"$ref": "#/$defs/blueprint"},
+    {"$ref": "#/$defs/robots"},
+    {"$ref": "#/$defs/event_log"},
+    {"$ref": "#/$defs/scenario"}
+  ],
+  "$defs": {
+    "index": {
+      "description": "Square lattices use [row, col]. Cubic and cuboctahedral lattices use [level, row, col]. Level 0 is the ground plane and levels increase upward. On the square lattice row 0 is the top of the frame.",
+      "type": "array",
+      "items": {"type": "integer"},
+      "minItems": 2,
+      "maxItems": 3
+    },
+    "stance": {
+      "description": "Two gripped voxel faces. The cell is the voxel; the normal points out of that voxel, one axis at a time.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feet"],
+      "properties": {
+        "feet": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cell", "normal"],
+            "properties": {
+              "cell": {"$ref": "#/$defs/index"},
+              "normal": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "minItems": 3,
+                "maxItems": 3
+              }
+            }
+          }
+        }
+      }
+    },
+    "pose": {
+      "description": "A cell the robot stands in, or an inchworm stance on two faces.",
+      "oneOf": [
+        {"$ref": "#/$defs/index"},
+        {"$ref": "#/$defs/stance"}
+      ]
+    },
+    "lattice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "pitch", "dimensions", "up_axis", "up_sign", "ground_plane"],
+      "properties": {
+        "type": {"enum": ["square", "cubic", "cuboctahedral"]},
+        "pitch": {
+          "description": "Center spacing in model length. The public suite uses 1. A published millimeter edge, when one exists, is metadata and is not this number while k = 1.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rows", "cols"],
+          "properties": {
+            "levels": {"type": "integer", "minimum": 1},
+            "rows": {"type": "integer", "minimum": 1},
+            "cols": {"type": "integer", "minimum": 1}
+          }
+        },
+        "up_axis": {"type": "integer", "minimum": 0, "maximum": 2},
+        "up_sign": {"enum": [-1, 1]},
+        "ground_plane": {"type": "integer", "minimum": 0}
+      }
+    },
+    "cell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "voxel_type"],
+      "properties": {
+        "index": {"$ref": "#/$defs/index"},
+        "voxel_type": {
+          "description": "structural is a blueprint cell still to place. seed is already placed and is not remaining work. scaffold is a temporary support already in the start state.",
+          "enum": ["structural", "seed", "scaffold"]
+        }
+      }
+    },
+    "model": {
+      "description": "Spring-network parameters. fitted false means the numbers were not identified from a specimen. The public suite is k = mass = g = 1, displacement in mass*g/k.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["k", "mass", "g", "fitted", "displacement_units", "force_units", "note"],
+      "properties": {
+        "k": {"type": "number", "exclusiveMinimum": 0},
+        "k_axial": {"type": "number", "exclusiveMinimum": 0},
+        "k_shear": {"type": "number", "exclusiveMinimum": 0},
+        "mass": {"type": "number", "exclusiveMinimum": 0},
+        "g": {"type": "number"},
+        "fitted": {"type": "boolean"},
+        "displacement_units": {"type": "string", "minLength": 1},
+        "force_units": {"type": "string", "minLength": 1},
+        "note": {"type": "string", "minLength": 1}
+      }
+    },
+    "blueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "format_version",
+        "kind",
+        "id",
+        "lattice",
+        "cells",
+        "seed",
+        "supports",
+        "model"
+      ],
+      "properties": {
+        "format": {"const": "discrete-assembly"},
+        "format_version": {"const": "1.0.0"},
+        "kind": {"const": "blueprint"},
+        "id": {"type": "string", "minLength": 1},
+        "title": {"type": "string"},
+        "lattice": {"$ref": "#/$defs/lattice"},
+        "cells": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/cell"}
+        },
+        "seed": {
+          "description": "Indices whose voxel_type is seed. The same cells, listed again so a planner can find the start structure without scanning types.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/index"}
+        },
+        "supports": {
+          "description": "Indices whose voxel_type is scaffold. Empty when the start state has no temporary support. A planner that inserts support records those cells in the event log, not by editing this list.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/index"}
+        },
+        "model": {"$ref": "#/$defs/model"},
+        "meta": {
+          "type": "object"
+        }
+      }
+    },
+    "motion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reach_radius", "stride", "climb", "lattice_only"],
+      "properties": {
+        "reach_radius": {"type": "integer", "minimum": 1},
+        "stride": {"type": "integer", "minimum": 1},
+        "climb": {"type": "integer", "minimum": 0},
+        "lattice_only": {"type": "boolean"}
+      }
+    },
+    "gait": {
+      "description": "Inchworm surface policy. These fields are configuration. They are not a joint-trajectory fit to BILL-E or SOLL-E.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stride",
+        "span",
+        "place_reach",
+        "allow_top",
+        "allow_sides",
+        "allow_inverted",
+        "allow_flat",
+        "allow_convex",
+        "allow_concave"
+      ],
+      "properties": {
+        "stride": {"type": "integer", "minimum": 1},
+        "span": {"type": "number", "exclusiveMinimum": 0},
+        "place_reach": {"type": "integer", "minimum": 1},
+        "allow_top": {"type": "boolean"},
+        "allow_sides": {"type": "boolean"},
+        "allow_inverted": {"type": "boolean"},
+        "allow_flat": {"type": "boolean"},
+        "allow_convex": {"type": "boolean"},
+        "allow_concave": {"type": "boolean"}
+      }
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description"],
+      "properties": {
+        "description": {"type": "string", "minLength": 1},
+        "mass": {"type": "number", "minimum": 0},
+        "carried_mass": {"type": "number", "minimum": 0},
+        "step_s": {"type": "number", "exclusiveMinimum": 0},
+        "feed_load_s": {"type": "number", "exclusiveMinimum": 0},
+        "handoff_s": {"type": "number", "exclusiveMinimum": 0},
+        "place_s": {"type": "number", "exclusiveMinimum": 0},
+        "fasten_joint_s": {"type": "number", "exclusiveMinimum": 0},
+        "time_source": {"type": "string", "minLength": 1}
+      }
+    },
+    "robot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "locomotion", "depot", "start"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "role": {"type": "string", "minLength": 1},
+        "locomotion": {"enum": ["cell", "inchworm"]},
+        "motion": {"$ref": "#/$defs/motion"},
+        "gait": {"$ref": "#/$defs/gait"},
+        "depot": {"$ref": "#/$defs/pose"},
+        "start": {"$ref": "#/$defs/pose"}
+      }
+    },
+    "fault_rates": {
+      "description": "Channel probabilities and durations. Configuration, not a measurement. A rate of zero does not draw.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capture": {"type": "number", "minimum": 0, "maximum": 1},
+        "drop": {"type": "number", "minimum": 0, "maximum": 1},
+        "stall": {"type": "number", "minimum": 0, "maximum": 1},
+        "robot_fail": {"type": "number", "minimum": 0, "maximum": 1},
+        "fastener": {"type": "number", "minimum": 0, "maximum": 1},
+        "feed_outage": {"type": "number", "minimum": 0, "maximum": 1},
+        "stall_ticks": {"type": "integer", "minimum": 1},
+        "down_ticks": {"type": "integer", "minimum": 1},
+        "outage_ticks": {"type": "integer", "minimum": 1},
+        "outage_s": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "faults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seed", "rate_source"],
+      "properties": {
+        "seed": {"type": "integer", "minimum": 0},
+        "rate_source": {"const": "configuration"},
+        "script": {
+          "type": "array",
+          "items": {
+            "enum": ["capture", "drop", "stall", "robot_fail", "fastener", "feed_outage"]
+          }
+        },
+        "rates": {"$ref": "#/$defs/fault_rates"}
+      }
+    },
+    "robots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "format_version",
+        "kind",
+        "id",
+        "robots",
+        "roles",
+        "defect_p",
+        "inspect",
+        "rng_seed"
+      ],
+      "properties": {
+        "format": {"const": "discrete-assembly"},
+        "format_version": {"const": "1.0.0"},
+        "kind": {"const": "robots"},
+        "id": {"type": "string", "minLength": 1},
+        "robots": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/robot"}
+        },
+        "roles": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/role"}
+        },
+        "schedule": {"enum": ["three-role"]},
+        "robots_per_role": {"type": "integer", "minimum": 1},
+        "n_feeds": {"type": "integer", "minimum": 1},
+        "defect_p": {
+          "description": "Bernoulli bad-bond probability for the 2D robot. Configuration. Zero leaves that channel off.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "inspect": {"type": "boolean"},
+        "rng_seed": {"type": "integer", "minimum": 0},
+        "faults": {"$ref": "#/$defs/faults"}
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "type"],
+      "properties": {
+        "t": {"type": "number", "minimum": 0},
+        "type": {"enum": ["placement", "removal", "fault", "recovery", "gate"]},
+        "cell": {"$ref": "#/$defs/index"},
+        "robot": {"type": "string"},
+        "role": {"type": "string"},
+        "voxel_type": {"enum": ["structural", "seed", "scaffold"]},
+        "fault": {
+          "enum": [
+            "capture",
+            "drop",
+            "stall",
+            "robot_fail",
+            "fastener",
+            "feed_outage",
+            "defect",
+            "cascade"
+          ]
+        },
+        "action": {"enum": ["re-place", "re-route", "reassign", "scaffold"]},
+        "gate": {
+          "enum": [
+            "connectivity",
+            "buildability",
+            "stability",
+            "sag",
+            "joint",
+            "coordination"
+          ]
+        },
+        "verdict": {"enum": ["accept", "refuse"]},
+        "reason": {"type": "string"},
+        "joint": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/index"}
+        },
+        "cascade": {"type": "boolean"},
+        "cause": {"type": "integer", "minimum": 0}
+      }
+    },
+    "event_log": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "format_version",
+        "kind",
+        "scenario_id",
+        "clock",
+        "makespan",
+        "events"
+      ],
+      "properties": {
+        "format": {"const": "discrete-assembly"},
+        "format_version": {"const": "1.0.0"},
+        "kind": {"const": "event_log"},
+        "scenario_id": {"type": "string", "minLength": 1},
+        "clock": {"enum": ["tick", "second"]},
+        "makespan": {
+          "description": "Clock reading when the run stopped. Tick runs are swarm ticks. The shelter schedule is seconds. A refusal before any step is 0.",
+          "type": "number",
+          "minimum": 0
+        },
+        "events": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/event"}
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runner", "gate", "scaffold"],
+      "properties": {
+        "runner": {
+          "enum": ["swarm", "scaffold", "armadas", "wall2d", "precheck"]
+        },
+        "gate": {"enum": ["off", "finished", "cantilever-0"]},
+        "scaffold": {"enum": ["none", "minimal"]},
+        "n_robots": {"type": "integer", "minimum": 1},
+        "max_ticks": {"type": "integer", "minimum": 0},
+        "max_nodes": {"type": "integer", "minimum": 1},
+        "span": {"type": "integer", "minimum": 1},
+        "length": {"type": "integer", "minimum": 1},
+        "rng_seed": {"type": "integer", "minimum": 0},
+        "n_feeds": {"type": "integer", "minimum": 1},
+        "robots_per_role": {"type": "integer", "minimum": 1}
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "format_version",
+        "kind",
+        "id",
+        "title",
+        "family",
+        "blueprint",
+        "robots",
+        "task"
+      ],
+      "properties": {
+        "format": {"const": "discrete-assembly"},
+        "format_version": {"const": "1.0.0"},
+        "kind": {"const": "scenario"},
+        "id": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "family": {"type": "string", "minLength": 1},
+        "blueprint": {"$ref": "#/$defs/blueprint"},
+        "robots": {"$ref": "#/$defs/robots"},
+        "task": {"$ref": "#/$defs/task"},
+        "notes": {"type": "string"},
+        "meta": {"type": "object"}
+      }
+    }
+  }
+}

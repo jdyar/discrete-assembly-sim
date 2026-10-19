@@ -1,0 +1,138 @@
+{
+  "format": "discrete-assembly",
+  "format_version": "1.0.0",
+  "kind": "scenario",
+  "id": "cantilever-3",
+  "title": "Cantilever length 3",
+  "family": "cantilever",
+  "blueprint": {
+    "format": "discrete-assembly",
+    "format_version": "1.0.0",
+    "kind": "blueprint",
+    "id": "cantilever-3.blueprint",
+    "lattice": {
+      "type": "cubic",
+      "pitch": 1.0,
+      "dimensions": {
+        "levels": 4,
+        "rows": 6,
+        "cols": 11
+      },
+      "up_axis": 0,
+      "up_sign": 1,
+      "ground_plane": 0
+    },
+    "cells": [
+      {
+        "index": [
+          1,
+          2,
+          3
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          2,
+          3
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          2,
+          4
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          2,
+          5
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          2,
+          6
+        ],
+        "voxel_type": "structural"
+      }
+    ],
+    "seed": [],
+    "supports": [],
+    "model": {
+      "k": 1.0,
+      "mass": 1.0,
+      "g": 1.0,
+      "fitted": false,
+      "displacement_units": "mass*g/k",
+      "force_units": "mass*g",
+      "note": "k = 1 is not a fit. Displacement is in model units of mass*g/k, not a measured sag. Stiffness has not been fit to a printed specimen."
+    },
+    "title": "Cantilever length 3",
+    "meta": {
+      "source": "experiments.stability_cost.build_cantilever",
+      "length": 3
+    }
+  },
+  "robots": {
+    "format": "discrete-assembly",
+    "format_version": "1.0.0",
+    "kind": "robots",
+    "id": "cantilever-3.robots",
+    "robots": [
+      {
+        "id": "r0",
+        "role": "builder",
+        "locomotion": "cell",
+        "motion": {
+          "reach_radius": 1,
+          "stride": 1,
+          "climb": 1,
+          "lattice_only": false
+        },
+        "depot": [
+          1,
+          1,
+          1
+        ],
+        "start": [
+          1,
+          5,
+          4
+        ]
+      }
+    ],
+    "roles": {
+      "builder": {
+        "description": "One cell per step, reach 1, climb 1. Configuration, not a measured gait.",
+        "mass": 0.0,
+        "carried_mass": 0.0
+      }
+    },
+    "defect_p": 0.0,
+    "inspect": true,
+    "rng_seed": 0
+  },
+  "task": {
+    "runner": "swarm",
+    "gate": "finished",
+    "scaffold": "none",
+    "n_robots": 1,
+    "max_ticks": 8000,
+    "max_nodes": 40000,
+    "rng_seed": 0,
+    "length": 3
+  },
+  "notes": "k = mass = g = 1. Displacement is mass*g/k and force is mass*g. Stiffness has not been fit to a printed specimen. k = 1 is not a fit. Displacement is in model units of mass*g/k, not a measured sag. Stiffness has not been fit to a printed specimen. The root voxel is part of the blueprint. The arm is at level 2.",
+  "meta": {
+    "source": "experiments.stability_cost.build_cantilever",
+    "length": 3
+  }
+}
