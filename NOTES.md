@@ -386,6 +386,26 @@ JSON shape:
             "robot": null | {"pos": [row, col], "state": "MOVING", "carrying": true}}]}
 ```
 
+## Public interchange and benchmark (2026-10-19)
+
+Format `discrete-assembly` 1.0.0 is a separate document from the replay
+viewer's run log. Four kinds: blueprint, robots, event_log, scenario.
+The checker in `sim/format.py` is a draft 2020-12 subset so CI stays on
+NumPy and Matplotlib. Seed cells are already placed and are not
+blueprint cells. Supports are scaffold already in the start state. A
+planner that inserts scaffold writes those cells in the event log.
+
+`k = 1` is not a fit. Public rows refuse a fitted model and refuse any
+`k`, `mass`, or `g` other than 1. Displacement units on an unfitted
+model are `mass*g/k`.
+
+`python main.py bench` scores the stock planner on the 21 committed
+scenarios. Spans 7 and 8 under the stepper (reach 1, climb 1) stop at
+the 8000-tick cap. The crane motion finishes span 8 with scaffold
+count 0. The unit tests run the nine-task smoke set, not the full
+bench. Submission notes for ARMADAS, MIT CBA, and TU Delft are in
+`docs/BENCHMARKS.md`. The bench command scores the stock planner already in the repository.
+
 ## Slice 1 invariants (tested)
 
 - Every placement cell is adjacent to a cell the robot can legally stand

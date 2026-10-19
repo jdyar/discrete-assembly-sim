@@ -1,0 +1,262 @@
+{
+  "format": "discrete-assembly",
+  "format_version": "1.0.0",
+  "kind": "scenario",
+  "id": "wall-2d",
+  "title": "6×4 wall",
+  "family": "wall",
+  "blueprint": {
+    "format": "discrete-assembly",
+    "format_version": "1.0.0",
+    "kind": "blueprint",
+    "id": "wall-2d.blueprint",
+    "lattice": {
+      "type": "square",
+      "pitch": 1.0,
+      "dimensions": {
+        "rows": 7,
+        "cols": 10
+      },
+      "up_axis": 0,
+      "up_sign": -1,
+      "ground_plane": 6
+    },
+    "cells": [
+      {
+        "index": [
+          2,
+          2
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          3
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          4
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          5
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          6
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          2,
+          7
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          3,
+          2
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          3,
+          3
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          3,
+          4
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          3,
+          5
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          3,
+          6
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          3,
+          7
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          4,
+          2
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          4,
+          3
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          4,
+          4
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          4,
+          5
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          4,
+          6
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          4,
+          7
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          5,
+          2
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          5,
+          3
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          5,
+          4
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          5,
+          5
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          5,
+          6
+        ],
+        "voxel_type": "structural"
+      },
+      {
+        "index": [
+          5,
+          7
+        ],
+        "voxel_type": "structural"
+      }
+    ],
+    "seed": [],
+    "supports": [],
+    "model": {
+      "k": 1.0,
+      "mass": 1.0,
+      "g": 1.0,
+      "fitted": false,
+      "displacement_units": "mass*g/k",
+      "force_units": "mass*g",
+      "note": "k = 1 is not a fit. Displacement is in model units of mass*g/k, not a measured sag. Stiffness has not been fit to a printed specimen."
+    },
+    "title": "6×4 wall",
+    "meta": {
+      "source": "main.build_world"
+    }
+  },
+  "robots": {
+    "format": "discrete-assembly",
+    "format_version": "1.0.0",
+    "kind": "robots",
+    "id": "wall-2d.robots",
+    "robots": [
+      {
+        "id": "r0",
+        "role": "builder",
+        "locomotion": "cell",
+        "motion": {
+          "reach_radius": 1,
+          "stride": 1,
+          "climb": 1,
+          "lattice_only": false
+        },
+        "depot": [
+          5,
+          0
+        ],
+        "start": [
+          5,
+          0
+        ]
+      }
+    ],
+    "roles": {
+      "builder": {
+        "description": "Square-lattice surface robot. The 2D depot is a grip cell beside the wall.",
+        "mass": 0.0,
+        "carried_mass": 0.0
+      }
+    },
+    "defect_p": 0.0,
+    "inspect": true,
+    "rng_seed": 0
+  },
+  "task": {
+    "runner": "wall2d",
+    "gate": "off",
+    "scaffold": "none",
+    "n_robots": 1,
+    "max_ticks": 4000,
+    "rng_seed": 0
+  },
+  "notes": "k = mass = g = 1. Displacement is mass*g/k and force is mass*g. Stiffness has not been fit to a printed specimen. k = 1 is not a fit. Displacement is in model units of mass*g/k, not a measured sag. Stiffness has not been fit to a printed specimen. Gate off: this is the coordination wall, not a sag case.",
+  "meta": {
+    "source": "main.build_world",
+    "width": 6,
+    "height": 4,
+    "left": 2
+  }
+}
