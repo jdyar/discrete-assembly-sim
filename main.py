@@ -21,6 +21,8 @@ log goes to runs/latest.json for the replay viewer.
     python main.py joints smoke
     python main.py precision  # placement error Monte Carlo -> docs/precision_*
     python main.py precision smoke
+    python main.py faults     # seeded fault injection -> docs/fault_campaign.csv
+    python main.py faults smoke
 """
 
 from __future__ import annotations
@@ -648,6 +650,11 @@ def main() -> None:
         from experiments.precision_campaign import main as precision_main
 
         precision_main(sys.argv[2:])
+        return
+    elif mode == "faults":
+        from experiments.fault_campaign import main as faults_main
+
+        faults_main(sys.argv[2:])
         return
     elif mode == "swarm":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 2
