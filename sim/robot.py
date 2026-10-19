@@ -124,6 +124,7 @@ class Robot:
         rng: random.Random | None = None,
         inspect_enabled: bool = True,
         geometry: Geometry | None = None,
+        precision=None,
     ):
         # Lattice rules are injected; None = square lattice built per tick
         # from the world handed to tick() (keeps the historical call shape).
@@ -143,6 +144,10 @@ class Robot:
         self.needs_replan = False  # set after removing a defect; executor replans
         self.inspections = 0
         self.defects_found = 0
+        # Opt-in. A missed capture is a defect on the same inspect/remove
+        # path as a bad bond. None leaves the Bernoulli roll unchanged.
+        self.precision = precision
+        self.capture_failures = 0
 
     def load_plan(self, tasks: list) -> None:
         """Adopt a fresh plan from the planner (initial or replan)."""
@@ -236,6 +241,14 @@ class Robot:
         if self.state == PLACE:
             cell = self._task_cell(self.tasks[0])
             defective = self.defect_p > 0 and self.rng.random() < self.defect_p
+            if self.precision is not None:
+                outcome = self.precision.attempt(cell, self.rng)
+                if outcome.captured:
+                    self.precision.commit(cell, outcome.pose)
+                else:
+                    self.precision.commit(cell, outcome.offered)
+                    self.capture_failures += 1
+                    defective = True
             world.place_voxel(cell, defective=defective)
             self.carrying = False
             self._path = []
@@ -265,6 +278,8 @@ class Robot:
             # robot never mutates the plan itself).
             cell = self._task_cell(self.tasks[0])
             world.remove_voxel(cell)
+            if self.precision is not None:
+                self.precision.forget(cell)
             self.needs_replan = True
             self.state = IDLE
             self._path = []

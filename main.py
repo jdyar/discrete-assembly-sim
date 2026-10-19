@@ -19,6 +19,8 @@ log goes to runs/latest.json for the replay viewer.
     python main.py armadas smoke
     python main.py joints     # joint vs sag limits -> docs/joint_limits.*
     python main.py joints smoke
+    python main.py precision  # placement error Monte Carlo -> docs/precision_*
+    python main.py precision smoke
 """
 
 from __future__ import annotations
@@ -641,6 +643,11 @@ def main() -> None:
         from experiments.joint_limits import main as joints_main
 
         joints_main(sys.argv[2:])
+        return
+    elif mode == "precision":
+        from experiments.precision_campaign import main as precision_main
+
+        precision_main(sys.argv[2:])
         return
     elif mode == "swarm":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 2

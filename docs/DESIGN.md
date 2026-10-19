@@ -183,6 +183,16 @@ papers only:
   conflict in the same reservation table and cooperative A*. Robot
   weight is a point load at the foot voxels
   (`split_foot_loads`), off unless a caller sets a mass.
+- **Placement error** (`sim/precision.py`) is opt-in and is not the
+  spring network. A new cell draws a position and one angle, tests
+  them against the ski and claw envelopes, and either snaps to the
+  elastic average of its mating neighbors or fails the capture. A
+  miss is the existing `DEFECT` occupancy, so inspect / remove /
+  replace already covers it. Coordinate arithmetic stays in this
+  module. `Swarm` and `Robot` call `attempt`, `commit`, and `forget`.
+  Scaffold placements do not draw. `k` is not an argument. Sag
+  elsewhere stays the unfitted `k = 1`. The default box is the
+  ARMADAS requirement (±1.78 cm, ±3°), not a measured histogram.
 
 ## Test discipline
 

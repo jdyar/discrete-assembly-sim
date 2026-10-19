@@ -18,7 +18,7 @@ git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-asse
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m unittest                 # 229 tests
+python -m unittest                 # 254 tests
 python main.py bridge              # 1 robot, gate on, strain log -> runs/bridge.json
 python main.py cuboct              # 2×2×2 cuboctahedra -> runs/cuboct.json
 python main.py stability          # 312-trial gate campaign -> docs/stability_cost.csv
@@ -26,6 +26,7 @@ python main.py onlattice          # crane vs on-lattice, with robot weight -> do
 python main.py scaffold           # temporary supports -> docs/scaffold_campaign.csv
 python main.py armadas            # shelter benchmark sweep -> docs/armadas_sweep.csv
 python main.py joints             # joint vs sag limits -> docs/joint_limits_summary.txt
+python main.py precision          # placement error Monte Carlo -> docs/precision_campaign.csv
 ```
 
 Open `replay_viewer.html` and drop `runs/bridge.json` on it (or serve the repo root with `python -m http.server` and it loads `runs/latest.json`). Displacement color and a marker on the worst-sag cell appear only when the log has samples. The blocks are drawn on the cells where they were placed. An exaggerate slider, off until you move it, redraws the longest arrow as a fraction of the voxel pitch. `pip install git+https://github.com/jdyar/discrete-assembly-sim.git` then `import sim` prints **0.1.0** until the tag.
@@ -56,11 +57,12 @@ The gate and the sag solver stay out of the planner unless a caller passes a `St
 - **Stability precheck.** Before the order search, overhang in the *finished* structure lower-bounds every prefix. A blueprint that already fails the cantilever limit is rejected without spending the node budget. The screen does not reject a blueprint the search could return.
 - **Temporary scaffold.** When the finished blueprint passes the caps and no reachable order does, the planner adds the smallest set of support voxels in the column under the blueprint, builds with them, and removes them in an order that stays inside the same caps. Robots, including the on-lattice inchworm, can walk on scaffold. The search minimizes the count, then a single-robot travel score. The swarm tick count is measured separately. `k = 1` is not a fit. `python main.py scaffold` writes [`docs/scaffold_campaign.csv`](docs/scaffold_campaign.csv). The long form is [WHITEPAPER.md](WHITEPAPER.md) §4.4 and §6.8.
 - **Joint strength.** Each face spring can carry a compression, tension, shear, and optional moment capacity beside its stiffness. The load is the spring force from the same solve, in units of `mass·g` at `k = 1`. A `JointCap` rejects an order where any joint exceeds capacity times a safety factor. The published 3×3×3 cube gives a derived face compression of 1057.2365952 N; that number is not applied to a `k = 1` row. `python main.py joints` writes which builds are shear-limited, compression-limited, or both, and that a cap at the finished demand does not add scaffold. The PLA cantilever table stays `PENDING` and measures `k_shear` only. Joint strength from a connector print is a separate `PENDING` hook in [`docs/VALIDATION.md`](docs/VALIDATION.md). Long form: [WHITEPAPER.md](WHITEPAPER.md) §3.5 and §6.10.
+- **Placement error.** Opt-in (`sim/precision.py`). A new voxel draws a position and one angle, default uniform inside the ARMADAS requirement of ±1.78 cm and ±3°. That box is a requirement, not a measured histogram. Inside the ski and claw envelopes the joint snaps to the elastic average of the mating faces. Outside them the placement fails and the existing defect path removes it. `k` is not an input. `python main.py precision` writes [`docs/precision_campaign.csv`](docs/precision_campaign.csv). Long form: [WHITEPAPER.md](WHITEPAPER.md) §3.6 and §6.11.
 
 - **On-lattice inchworm** (`sim/inchworm.py`). Opt-in. The default robot still stands in an empty cell. The inchworm grips two voxel faces, steps one foot at a time, and places a voxel on a face it can reach from that stance. Stride, span, place reach, and which faces are walkable are configuration; the module docstring says which of those numbers are in the BILL-E and SOLL-E papers and which are not. Robot weight is a point load at the foot voxels, also off unless a caller sets a mass.
 - **That comparison** (`python main.py onlattice`, 108 trials, `docs/on_lattice.csv`). Numbers in the next section. `k = 1`.
 
-The suite covers the traps, the 3D repair loop, fuzz, the examples, the screen, the precheck, the strain log, the bridge span, a smoke run of each campaign, the cuboct solid, the gait, the tip point-load closed form `P·n/k_shear`, scaffold insertion and removal, the shelter benchmark, and the joint-utilization gate (closed-form spring forces, the 3×3×3 derivation, and a crane span-4 cap that stays at 0 scaffold until the finished demand is cut in half). The count is in the quickstart.
+The suite covers the traps, the 3D repair loop, fuzz, the examples, the screen, the precheck, the strain log, the bridge span, a smoke run of each campaign, the cuboct solid, the gait, the tip point-load closed form `P·n/k_shear`, scaffold insertion and removal, the shelter benchmark, the joint-utilization gate (closed-form spring forces, the 3×3×3 derivation, and a crane span-4 cap that stays at 0 scaffold until the finished demand is cut in half), and the placement-error closed forms plus the capture-to-defect repair. The count is in the quickstart.
 
 ## Results
 
@@ -110,6 +112,9 @@ The still is the cantilever at ratio 3, both feet on adjacent top faces, displac
 
 ![Span-5 inchworm, yellow scaffold under the blue deck, material color, true geometry.](docs/scaffold_standing.png)
 
+**Placement error.** `python main.py precision`, uniform inside ±1.78 cm and ±3°, ski ±1.78 cm, claw 1.34 cm. Stiffness is not an input; sag elsewhere stays the unfitted `k = 1`. With the snap on, every cantilever (n = 40), every bridge (n = 40), and all 16 shelter trials seat, and position RMS is numerical zero (at most 1.00637×10⁻¹⁵ m). The miss rate follows the closed form: 0.247191 on a single-mate chain, 0.445993 against 0.431871 on the 256-cell shelter. Open-loop tip medians grow from 0.0284 m at 3 free cells to 0.405 m at 24. Gate-without-snap finishes the cantilevers and 11/40 bridges at gap 4, then 0/40 at gaps 12 and 16. Halving the envelopes takes the miss rate to about 0.91. Doubling them takes it to 0. The IEEE Aerospace 2024 inch RMS values are a strut-length study and are not these rows. Table: [WHITEPAPER.md](WHITEPAPER.md) §6.11.
+
+![Cantilever, 12 free voxels, true scale. Left: open loop wanders off the gray outlines. Right: snap sits on the grid. Amber is the datum. Not sag. k is not used.](docs/precision_cantilever.png)
 
 Coordination results from before the gate, regenerated with the gate off, are in the whitepaper §6.1–§6.5 and the charts under `docs/`: a 2D wall gives no speedup (406 ticks at one robot and at two); a 40-voxel hollow box goes from 472 ticks at one robot to ×2.81 at five, and a 96-voxel box reaches ×4.07 at five; corrected yield holds 100% at the tested defect rates, and uncorrected swarms jam (about 15% at p=0.08 in the 3D swarm chart) instead of following (1−p).
 
@@ -125,7 +130,8 @@ Coordination results from before the gate, regenerated with the gate off, are in
 ## Layout
 
 ```
-main.py                 # demos and experiments (bridge, cuboct, stability, onlattice, scaffold, ...)
+main.py                 # demos and experiments (bridge, cuboct, stability, onlattice, scaffold, precision, ...)
+sim/precision.py        # opt-in placement error and ski/claw capture; k is not an input
 sim/inchworm.py         # opt-in on-lattice gait; off unless a caller builds it
 sim/stability.py        # gate, sag solver, closed forms, point loads, precheck
 sim/scaffold.py         # minimal temporary supports, then a stable removal
@@ -136,6 +142,7 @@ scripts/render_demo.py  # ~60 s Playwright + ffmpeg capture
 docs/VALIDATION.md      # print plan and empty results log
 docs/stability_cost.csv # 312-trial gate campaign
 docs/scaffold_campaign.csv # spans 4–8, crane and inchworm, 90 trials
+docs/precision_campaign.csv # placement-error Monte Carlo; k is not used
 WHITEPAPER.md           # citable technical account
 CHANGELOG.md            # v0.2.0 unreleased
 ```
