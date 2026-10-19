@@ -48,6 +48,7 @@ from .choreographer import (
     plan_remove_task,
     plan_task,
     plan_walk,
+    stability_gate,
 )
 from .faults import CAPTURE_MISS, face_partner, fastener_joint, script_capture_miss
 from .geometry import Geometry, SquareLattice2D
@@ -102,6 +103,12 @@ class Sequencer:
         self.stability = stability
         self.queue: list[Node] = []
         self.claimed: set[Node] = set()
+        # Cells the structural gate refused on the current prefix. They
+        # stay out of the claim window until a placement or a resequence.
+        # A short cooldown cannot do this: several nearer illegal cells
+        # expire and get reclaimed before the scan reaches a cell the
+        # gate would accept, and the build spins until the tick cap.
+        self.deferred: set[Node] = set()
         self.needs_resequence = False
         # Scripted place-then-remove. Cells are unique within a phase, so
         # the queue can stay a list of nodes. Removals are loaded only
@@ -124,6 +131,7 @@ class Sequencer:
         places that are still empty, or the removals that are still
         standing once every scripted place has landed.
         """
+        self.deferred.clear()
         if self.scripted:
             from .world import EMPTY
 
@@ -180,7 +188,12 @@ class Sequencer:
         unplannable cell every tick and starves robots that could
         actually do it (livelock found by the repair-in-a-crowd trap).
         """
-        window = [c for c in self.queue[: self.claim_ahead] if c not in (skip or ())]
+        blocked = skip or ()
+        window = [
+            c
+            for c in self.queue[: self.claim_ahead]
+            if c not in blocked and c not in self.deferred
+        ]
         if not window:
             return None
         cell = min(window, key=lambda c: geometry.heuristic_distance(near, c))
@@ -193,8 +206,21 @@ class Sequencer:
         self.claimed.discard(cell)
         self.queue.insert(0, cell)
 
+    def defer(self, cell: Node) -> None:
+        """Return a cell the structural gate refused on this prefix.
+
+        It is not placed at the front. The claim window skips it until
+        the prefix changes, so a nearer illegal cell cannot starve a
+        farther cell the gate would accept.
+        """
+        self.claimed.discard(cell)
+        if cell not in self.queue:
+            self.queue.append(cell)
+        self.deferred.add(cell)
+
     def complete(self, cell: Node) -> None:
         self.claimed.discard(cell)
+        self.deferred.clear()
         self.note_progress()
 
     def repair(self, cell: Node) -> None:
@@ -209,6 +235,7 @@ class Sequencer:
         The window is bounded — every standing defect's detector already
         holds its REMOVE step."""
         self.claimed.discard(cell)
+        self.deferred.clear()
         if self.world.defect_count:
             self.needs_resequence = True
         else:
@@ -479,75 +506,110 @@ class Swarm:
             return
         skip = {c for c, until in r.claim_cooldown.items() if until > t}
         r.claim_cooldown = {c: u for c, u in r.claim_cooldown.items() if u > t}
-        cell = self.sequencer.claim(r.pos, self.geometry, skip)
-        if cell is None:
-            # No claimable work right now: return to the assigned storage
-            # node so an idle robot never squats in a cavity, corridor,
-            # or someone's stance.
-            self._yield_walk(r)
-            return
-
-        stances = _approaches_for(cell, self.geometry)
         anchors = [o.anchor for o in self.robots if o.id != r.id]
         self.table.release_owner(r.id, t + 1)  # drop the phase-0 hold
-        removing = self.sequencer.scripted and self.sequencer.phase == "remove"
-        if removing:
-            plan = plan_remove_task(
-                r.id,
-                r.pos,
-                t,
-                cell,
-                stances,
-                self.geometry,
-                self.table,
-                self.depot,
-                anchors,
-                static_obstacles=self._obstacles_for(r),
-                stability=self.stability,
-                sag=self.sag,
-                joints=self.joints,
-            )
-        else:
-            plan = plan_task(
-                r.id,
-                r.pos,
-                t,
-                cell,
-                stances,
-                self.geometry,
-                self.table,
-                self.depot,
-                anchors,
-                self.inspect_enabled,
-                static_obstacles=self._obstacles_for(r),
-                remaining_cells=frozenset(self.sequencer.queue),
-                stability=self.stability,
-                sag=self.sag,
-                check_buildability=not self.sequencer.scripted,
-                joints=self.joints,
-            )
-        if plan is None:
-            self._try_hold(r)
-            self.sequencer.kickback(cell)
-            r.claim_cooldown[cell] = t + CLAIM_COOLDOWN
-            r.backoff_until = t + 3
-            self.kickbacks += 1
-            self._event(r, "kickback", cell)
+        # One pass over the window. A cell the gate refuses is deferred
+        # and the next claim happens in this same tick, so the robot can
+        # reach a farther legal cell before any cooldown expires.
+        scans = 0
+        limit = len(self.sequencer.queue) + len(self.sequencer.deferred) + 1
+        while scans < limit:
+            scans += 1
+            cell = self.sequencer.claim(r.pos, self.geometry, skip)
+            if cell is None:
+                self._try_hold(r)
+                self._yield_walk(r)
+                return
+            removing = self.sequencer.scripted and self.sequencer.phase == "remove"
+            if not removing and self._prefix_refuses(cell):
+                self.sequencer.defer(cell)
+                self.kickbacks += 1
+                self._event(r, "kickback", cell)
+                continue
+            stances = _approaches_for(cell, self.geometry)
+            if removing:
+                plan = plan_remove_task(
+                    r.id,
+                    r.pos,
+                    t,
+                    cell,
+                    stances,
+                    self.geometry,
+                    self.table,
+                    self.depot,
+                    anchors,
+                    static_obstacles=self._obstacles_for(r),
+                    stability=self.stability,
+                    sag=self.sag,
+                    joints=self.joints,
+                )
+            else:
+                plan = plan_task(
+                    r.id,
+                    r.pos,
+                    t,
+                    cell,
+                    stances,
+                    self.geometry,
+                    self.table,
+                    self.depot,
+                    anchors,
+                    self.inspect_enabled,
+                    static_obstacles=self._obstacles_for(r),
+                    remaining_cells=frozenset(self.sequencer.queue),
+                    stability=self.stability,
+                    sag=self.sag,
+                    check_buildability=not self.sequencer.scripted,
+                    joints=self.joints,
+                )
+            if plan is None:
+                self._try_hold(r)
+                self.sequencer.kickback(cell)
+                r.claim_cooldown[cell] = t + CLAIM_COOLDOWN
+                r.backoff_until = t + 3
+                self.kickbacks += 1
+                self._event(r, "kickback", cell)
+                return
+            r.itinerary = list(plan.steps)
+            r.task = cell
+            r.task_kind = "remove" if removing else "place"
+            r.state = "TASKED"
+            r.fault_armed = False
+            r.pending_fault = None
+            r.drop_pending = False
+            self._arm_faults(r)
+            self._event(r, "claim", cell)
+            if self.faults is not None:
+                now = self.tick_count + 1
+                self.faults.finish_cell(
+                    cell, tick=now, kinds=("robot_fail", "cascade")
+                )
             return
-        r.itinerary = list(plan.steps)
-        r.task = cell
-        r.task_kind = "remove" if removing else "place"
-        r.state = "TASKED"
-        r.fault_armed = False
-        r.pending_fault = None
-        r.drop_pending = False
-        self._arm_faults(r)
-        self._event(r, "claim", cell)
-        if self.faults is not None:
-            now = self.tick_count + 1
-            self.faults.finish_cell(
-                cell, tick=now, kinds=("robot_fail", "cascade")
+        self._try_hold(r)
+        self._yield_walk(r)
+
+    def _prefix_refuses(self, cell: Node) -> bool:
+        """True when every stance for ``cell`` fails the structural gate.
+
+        A path failure is a different refusal: the cell may be legal and
+        only temporarily unreachable. Those keep the short cooldown.
+        """
+        if self.stability is None:
+            return False
+        stances = _approaches_for(cell, self.geometry)
+        if not stances:
+            return False
+        return all(
+            not stability_gate(
+                self.geometry,
+                cell,
+                self.stability,
+                approach=stance,
+                sag=self.sag,
+                joints=self.joints,
             )
+            for stance in stances
+        )
 
     def _replan_same(self, r: SwarmRobot) -> None:
         """Route the task this robot already holds, after a stall.

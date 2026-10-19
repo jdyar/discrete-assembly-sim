@@ -71,29 +71,31 @@ Motion on the stability-campaign bridges, walls, hollow box, cantilevers, and to
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | wall-2d | complete | 1 | 402 tick |  |  | 0 | 0 | 0 |
 | wall-3d | complete | 1 | 115 tick | 3 | 1 | 0 | 0 | 0 |
-| hollow-box | complete | 1 | 184 tick | 1.4 | 1 | 0 | 0 | 0 |
+| hollow-box | complete | 1 | 159 tick | 1.4 | 1 | 0 | 0 | 0 |
 | hollow-roof-limit-0 | infeasible | 0 | 0 tick |  |  | 0 | 0 | 0 |
 | cuboct-block | complete | 1 | 76 tick | 1 | 1 | 0 | 0 | 0 |
-| bridge-span-4 | complete | 1 | 87 tick | 4.5 | 1 | 0 | 0 | 0 |
-| bridge-span-5 | complete | 1 | 118 tick | 6 | 1 | 0 | 0 | 0 |
-| bridge-span-6 | complete | 1 | 128 tick | 8 | 1 | 0 | 0 | 0 |
-| bridge-span-7 | incomplete | 0.5 | 8000 tick | 10 | 1 | 0 | 0 | 0 |
-| bridge-span-8 | incomplete | 0.454545 | 8000 tick | 10 | 0.888889 | 0 | 0 | 0 |
+| bridge-span-4 | complete | 1 | 69 tick | 4.5 | 1 | 0 | 0 | 0 |
+| bridge-span-5 | complete | 1 | 82 tick | 6 | 1 | 0 | 0 | 0 |
+| bridge-span-6 | complete | 1 | 98 tick | 8 | 1 | 0 | 0 | 0 |
+| bridge-span-7 | complete | 1 | 130 tick | 10 | 1 | 0 | 0 | 0 |
+| bridge-span-8 | complete | 1 | 150 tick | 12.5 | 1 | 0 | 0 | 0 |
 | cantilever-3 | complete | 1 | 40 tick | 10 | 1 | 0 | 0 | 0 |
-| cantilever-4 | complete | 1 | 73 tick | 15 | 1 | 0 | 0 | 0 |
+| cantilever-4 | complete | 1 | 54 tick | 15 | 1 | 0 | 0 | 0 |
 | cantilever-arm | complete | 1 | 19 tick | 6 | 1 | 0 | 0 | 0 |
 | tower | complete | 1 | 14 tick | 6 | 1 | 0 | 0 | 0 |
-| onlattice-bridge | complete | 1 | 49 tick | 3 | 1 | 0 | 0 | 0 |
+| onlattice-bridge | complete | 1 | 37 tick | 3 | 1 | 0 | 0 | 0 |
 | armadas-shelter | complete | 1 | 42.972 h | 48.7104 | 2.78677 | 0 | 0 | 0 |
-| scaffold-span-4-crane | complete | 1 | 76 tick | 4.5 | 1 | 0 | 0 | 0 |
+| scaffold-span-4-crane | complete | 1 | 40 tick | 4.5 | 1 | 0 | 0 | 0 |
 | scaffold-span-4-inchworm | complete | 1 | 169 tick | 4.5 | 1 | 3 | 0 | 0 |
-| scaffold-span-8-crane | complete | 1 | 198 tick | 12.5 | 1 | 0 | 0 | 0 |
+| scaffold-span-8-crane | complete | 1 | 97 tick | 12.5 | 1 | 0 | 0 | 0 |
 | fault-wall | complete | 1 | 527 tick |  |  | 0 | 7 | 7 |
 | fault-tower | complete | 1 | 10 tick | 1 | 1 | 0 | 1 | 1 |
 
 Cascades are 0 on every row. Unrecovered is 0. The fault wall's median recovery time is 18 ticks. The fault tower's single recovery is `re-place` at 5 ticks. The hollow roof at limit 0 records one stability refusal and does not start a search. The shelter records 502 gate accepts and 0 refusals.
 
-Spans 7 and 8, under the stepper (reach 1, climb 1) and the 8000-tick cap, do not finish: completion 0.5 and 0.454545. That is the measured row. The same span-8 deck with the crane (reach 4, climb 0) finishes in 198 ticks with scaffold count 0 (`scaffold-span-8-crane`, peak sag 12.5). The crane search on span 4 also inserts 0 scaffold cells and finishes in 76 ticks. The inchworm on span 4 inserts 3 scaffold cells, all removed by the end, and finishes in 169 ticks. Those three counts match the scaffold campaign: the crane needs none, and the inchworm needs three cells under the span-4 deck.
+Spans 7 and 8 finish. The stepper (reach 1, climb 1) starts beside the far pier. Nearest claim used to grow that side to the cantilever limit, then reclaim the nearer floating deck cells: a cooldown of 8 ticks expired before the scan reached the other pier, and the run sat at the 8000-tick cap (completion 0.5 and 0.454545). A cell the structural gate refuses now stays out of the claim window until a placement changes the prefix. The caps are unchanged: span 7 is still overhang 3 and sag 10, span 8 is overhang 4 and sag 12.5. With that deferral, span 7 finishes in 130 ticks (peak sag 10, 3 gate refusals) and span 8 in 150 ticks (peak sag 12.5, 4 gate refusals). Scaffold count on both is 0.
+
+The crane (reach 4, climb 0) also finishes span 8 with scaffold count 0, in 97 ticks (`scaffold-span-8-crane`, peak sag 12.5). Span 4 with the crane inserts 0 scaffold cells and finishes in 40 ticks. The inchworm on span 4 inserts 3 scaffold cells, all removed by the end, and finishes in 169 ticks. The crane needs none. The inchworm needs three cells under the span-4 deck.
 
 The cantilever arm and the tower peak at 6, the closed form `n(n+1)/2` for `n = 3` free voxels at `k = mass = g = 1`. Bridge span 4 peaks at 4.5. Cantilever length 3 peaks at 10 and length 4 at 15, the same peaks the stability campaign reports once the limit allows the arm.
 
