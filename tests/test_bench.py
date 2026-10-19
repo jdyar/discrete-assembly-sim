@@ -1,9 +1,11 @@
 # Copyright (c) 2026 Joshua Dyar. MIT License (see LICENSE).
 """Public benchmark runner: columns, unfitted k, and the smoke tasks.
 
-The smoke set is the fast half of the suite. Spans 5–8, the inchworm
+The smoke set is the fast half of the suite. Spans 5 and 6, the inchworm
 scaffold search, and the 256-cell shelter run from ``python main.py bench``
-and are not repeated here. k = 1 is not a fit.
+and are not repeated here. Spans 7 and 8 are: nearest claim used to
+extend one pier and then retry the nearer floating deck cells until
+the 8000-tick cap. k = 1 is not a fit.
 """
 
 from __future__ import annotations
@@ -13,9 +15,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sim.bench import COLUMNS, SMOKE, markdown_table, replay_completion, run_ids, write_table
-from sim.format import FORMAT_VERSION, validate
+from sim.bench import (
+    COLUMNS,
+    SMOKE,
+    _caps,
+    markdown_table,
+    replay_completion,
+    run_ids,
+    write_table,
+)
+from sim.format import FORMAT_VERSION, validate, world_from_blueprint
 from sim.scenarios import SUITE, catalog
+from sim.stability import is_stable
 
 _DOCUMENTS = None
 
@@ -180,6 +191,59 @@ class SmokeRun(unittest.TestCase):
             with path.open(encoding="utf-8") as handle:
                 header = next(csv.reader(handle))
             self.assertEqual(header, list(COLUMNS))
+
+
+class LongBridge(unittest.TestCase):
+    """Spans 7 and 8 finish inside the tick cap with the finished caps.
+
+    The robot starts beside the far pier. Nearest claim used to grow
+    that cantilever to the limit, then reclaim the nearer floating deck
+    cells: each cooldown expired before the scan reached the other pier.
+    The gate is the finished structure's own overhang and sag.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.rows = {
+            row["id"]: row
+            for row in run_ids(["bridge-span-7", "bridge-span-8"])
+        }
+
+    def test_both_spans_complete_inside_the_tick_cap(self):
+        for ident, limit in (("bridge-span-7", 3), ("bridge-span-8", 4)):
+            row = self.rows[ident]
+            self.assertEqual(row["status"], "complete", ident)
+            self.assertEqual(row["completion"], 1.0, ident)
+            self.assertLess(row["makespan"], 8000, ident)
+            self.assertEqual(row["scaffold_count"], 0, ident)
+            self.assertEqual(row["k"], 1.0, ident)
+            self.assertFalse(row["fitted"], ident)
+            self.assertIn("not a fit", row["note"], ident)
+            scenario = documents()[ident]
+            world = world_from_blueprint(scenario["blueprint"])
+            policy, sag = _caps(world, scenario["task"])
+            self.assertEqual(policy.max_cantilever, limit, ident)
+            self.assertEqual(sag.k, 1.0, ident)
+            self.assertEqual(sag.mass, 1.0, ident)
+            self.assertEqual(sag.g, 1.0, ident)
+            self.assertFalse(
+                is_stable(self._one_sided(world, limit + 1), policy),
+                ident,
+            )
+
+    @staticmethod
+    def _one_sided(world, overhang: int):
+        """The far pier plus ``overhang`` deck cells and nothing on the near pier."""
+        cells = [
+            tuple(int(v) for v in idx) for idx in zip(*world.blueprint.nonzero())
+        ]
+        deck = sorted(cell for cell in cells if cell[0] == 2)
+        far = max(deck, key=lambda cell: cell[2])
+        kept = {far, (1, far[1], far[2])}
+        col = far[2]
+        for step in range(1, overhang + 1):
+            kept.add((2, far[1], col - step))
+        return kept
 
 
 class SuiteShape(unittest.TestCase):

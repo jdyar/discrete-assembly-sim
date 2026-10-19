@@ -18,7 +18,7 @@ git clone https://github.com/jdyar/discrete-assembly-sim.git && cd discrete-asse
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m unittest                 # 365 tests
+python -m unittest                 # 366 tests
 python main.py bench               # 21 public tasks -> benchmarks/results.csv
 python main.py bridge              # 1 robot, gate on, strain log -> runs/bridge.json
 python main.py cuboct              # 2×2×2 cuboctahedra -> runs/cuboct.json

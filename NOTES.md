@@ -400,10 +400,13 @@ planner that inserts scaffold writes those cells in the event log.
 model are `mass*g/k`.
 
 `python main.py bench` scores the stock planner on the 21 committed
-scenarios. Spans 7 and 8 under the stepper (reach 1, climb 1) stop at
-the 8000-tick cap. The crane motion finishes span 8 with scaffold
-count 0. The unit tests run the nine-task smoke set, not the full
-bench. Submission notes for ARMADAS, MIT CBA, and TU Delft are in
+scenarios. Spans 7 and 8 used to stop at the 8000-tick cap: nearest
+claim grew one pier, and the nearer floating deck cells were reclaimed
+before the other pier. A structural refusal is now deferred until the
+prefix changes. The finished caps are the same (span 7 overhang 3 and
+sag 10; span 8 overhang 4 and sag 12.5). Those two rows finish in 130
+and 150 ticks. The unit tests run the smoke set plus those two spans.
+Submission notes for ARMADAS, MIT CBA, and TU Delft are in
 `docs/BENCHMARKS.md`. The bench command scores the stock planner already in the repository.
 
 ## Slice 1 invariants (tested)
