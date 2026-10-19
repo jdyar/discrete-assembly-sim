@@ -465,6 +465,11 @@ class SimResult:
     worst_overhang: int
     place_order: tuple[tuple[int, int, int], ...] = field(repr=False)
     events: tuple[tuple[float, str, str, int], ...] = field(repr=False)
+    # Fault injection. Zero when the schedule was not given a FaultInjector.
+    # Rates that produced n_faults are configuration, not a measurement.
+    n_faults: int = 0
+    n_cascades: int = 0
+    n_scaffold: int = 0
 
     @property
     def makespan_h(self) -> float:
@@ -499,6 +504,8 @@ class _Robot:
     busy: float = 0.0
     job: int | None = None
     held_since: float | None = None
+    down_until: float = 0.0
+    stall_fault: int | None = None
 
 
 @dataclass
@@ -509,6 +516,7 @@ class _Station:
     waiting: list[int] = field(default_factory=list)
     inbound: int = 0
     busy: float = 0.0
+    down_until: float = 0.0
 
 
 def simulate(
@@ -518,6 +526,9 @@ def simulate(
     times: ActionTimes | None = None,
     stations: tuple[tuple[int, int, int], ...] | None = None,
     check_gate: bool = True,
+    faults=None,
+    precision=None,
+    joint_cap=None,
 ) -> SimResult:
     """Run one shelter (or a smaller gated order) to completion.
 
@@ -534,6 +545,13 @@ def simulate(
     yet legal blocks later fetches, so a cargo cannot hold a cell the
     gate will never return to. Placement may still run several legal
     frontier cells at once, which is what extra cranes are for.
+
+    ``faults`` is an optional :class:`~sim.faults.FaultInjector`. None
+    leaves the schedule unchanged. Rates on it are configuration, not a
+    measured histogram. ``precision`` is the capture model a capture
+    fault is tested against. ``joint_cap`` is the utilization gate, off
+    when omitted. ``k`` on that cap is the caller's; this module's sag
+    gate stays ``k = 1``.
     """
     clock = times or ActionTimes()
     if robots_per_role < 1:
@@ -556,6 +574,13 @@ def simulate(
     cranes = [_Robot(CRANE, i, origin) for i in range(robots_per_role)]
     fasteners = [_Robot(FASTEN, i, origin) for i in range(robots_per_role)]
     feeds = [_Station(i, pos) for i, pos in enumerate(station_cells)]
+    if precision is not None:
+        for cell in model.seed:
+            if cell not in precision.poses:
+                precision.note_datum(cell)
+    import random as _random
+
+    precision_rng = _random.Random(0 if faults is None else faults.seed)
     fastened: set[tuple[int, int, int]] = set(model.seed)
     peak = 0.0
     events: list[tuple[float, str, str, int]] = []
@@ -596,10 +621,114 @@ def simulate(
     def gate_ok(cell: tuple[int, int, int]) -> tuple[bool, float]:
         if not check_gate:
             return True, 0.0
-        return passes_gate(committed(cell), model.policy, model.finished_sag)
+        ok, sag = passes_gate(committed(cell), model.policy, model.finished_sag)
+        if not ok:
+            return False, sag
+        if joint_cap is not None:
+            from .stability import joints_within
+
+            if not joints_within(committed(cell), model.policy, joint_cap):
+                return False, sag
+        return True, sag
+
+    def _requeued_by_fault(cell: tuple[int, int, int]) -> bool:
+        if faults is None:
+            return False
+        for index in faults._open:
+            event = faults.events[index]
+            if event.cell == cell and event.kind in ("capture", "drop", "feed_outage"):
+                return True
+        return False
+
+    def close_role_fail(role: str, cell: tuple[int, int, int]) -> None:
+        if faults is None:
+            return
+        for index in list(faults._open):
+            event = faults.events[index]
+            if (
+                event.kind == "robot_fail"
+                and event.role == role
+                and event.cell == cell
+            ):
+                faults.finish(index, time_s=t)
+
+    def close_finished_cell(cell: tuple[int, int, int]) -> None:
+        """A finished voxel closes recoveries that were waiting on it.
+
+        A second robot can fail on a cell the first robot already
+        claimed. That extra failure has no later claim of its own.
+        The voxel finishing is the recovery.
+        """
+        if faults is None:
+            return
+        for index in list(faults._open):
+            event = faults.events[index]
+            if event.cell == cell and event.kind in ("robot_fail", "cascade", "fastener"):
+                faults.finish(index, time_s=t)
+
+    def stall_extra(robot: _Robot, cell: tuple[int, int, int]) -> float:
+        """Configured stall, in seconds. Zero when faults are off."""
+        if faults is None or not faults.roll("stall"):
+            return 0.0
+        extra = faults.rates.stall_ticks * clock.step_s
+        robot.stall_fault = faults.begin(
+            "stall",
+            time_s=t,
+            robot=robot.index,
+            role=robot.role,
+            cell=cell,
+        )
+        return extra
+
+    def close_stall(robot: _Robot) -> None:
+        if faults is None or robot.stall_fault is None:
+            return
+        faults.finish(robot.stall_fault, time_s=t)
+        robot.stall_fault = None
+
+    def fail_robot(robot: _Robot, cell: tuple[int, int, int] | None) -> bool:
+        """Take the robot down and leave the job for someone else."""
+        if faults is None or robot.down_until > t:
+            return False
+        if not faults.roll("robot_fail"):
+            return False
+        robot.down_until = t + faults.rates.down_ticks * clock.step_s
+        faults.begin(
+            "robot_fail",
+            time_s=t,
+            robot=robot.index,
+            role=robot.role,
+            cell=cell,
+        )
+        push(robot.down_until - t, "robot_up", (robot.role, robot.index))
+        return True
 
     def start_load(station: _Station, cargo: _Robot) -> None:
         job = jobs[cargo.job]  # type: ignore[index]
+        if faults is not None and (
+            station.down_until > t or faults.roll("feed_outage")
+        ):
+            if station.down_until <= t:
+                station.down_until = t + faults.rates.outage_s
+                faults.begin(
+                    "feed_outage",
+                    time_s=t,
+                    robot=cargo.index,
+                    role=CARGO,
+                    cell=job.cell,
+                )
+                push(faults.rates.outage_s, "outage_done", (station.index,))
+            job.stage = "queued"
+            job.holder = None
+            if cargo.held_since is not None:
+                cargo.busy += t - cargo.held_since
+                cargo.held_since = None
+            cargo.free = True
+            cargo.job = None
+            cargo.pos = station.pos
+            station.serving = None
+            station.waiting = [item for item in station.waiting if item != cargo.index]
+            return
         if cargo.held_since is not None:
             cargo.busy += t - cargo.held_since
             cargo.held_since = None
@@ -609,6 +738,8 @@ def simulate(
         station.busy += clock.feed_load_s
         cargo.busy += clock.feed_load_s
         log(CARGO, "load", job.index)
+        if faults is not None:
+            faults.finish_kind("feed_outage", time_s=t)
         push(clock.feed_load_s, "load_done", (cargo.index, station.index))
 
     def dispatch() -> None:
@@ -624,7 +755,7 @@ def simulate(
         # or its dependencies do not yet allow, so later cells cannot
         # leapfrog a hole.
         for cargo in cargos:
-            if not cargo.free:
+            if not cargo.free or cargo.down_until > t:
                 continue
             chosen: _Job | None = None
             for job in jobs:
@@ -641,8 +772,13 @@ def simulate(
                 break
             if chosen is None:
                 break
+            if fail_robot(cargo, chosen.cell):
+                continue
+            available = [item for item in feeds if item.down_until <= t]
+            if not available:
+                break
             station = min(
-                feeds,
+                available,
                 key=lambda item: (
                     item.inbound + (1 if item.serving is not None else 0) + len(item.waiting),
                     manhattan(cargo.pos, item.pos),
@@ -656,20 +792,30 @@ def simulate(
             station.inbound += 1
             steps = manhattan(cargo.pos, station.pos)
             cargo_steps += steps
-            travel = steps * clock.step_s
+            travel = steps * clock.step_s + stall_extra(cargo, chosen.cell)
             cargo.busy += travel
             log(CARGO, "to_feed", chosen.index)
+            close_role_fail(CARGO, chosen.cell)
             push(travel, "arrive_feed", (cargo.index, station.index))
 
         # Place the ready holding prefix. Several may be legal at once.
         for crane in cranes:
-            if not crane.free:
+            if not crane.free or crane.down_until > t:
                 continue
             chosen_job: _Job | None = None
             for job in jobs:
                 if job.stage in ("done", "placing", "placed"):
                     continue
                 if job.stage != "holding" or not deps_done(job):
+                    # A capture, drop, or feed fault puts a cell back in
+                    # the queue after a later cell is already at the site.
+                    # Both cargos can be the ones holding those later
+                    # cells, so refusing to place them waits forever for
+                    # a fetch that has no free cargo. Skip only a cell
+                    # with that fault still open. An unfaulted hole still
+                    # blocks, which keeps the rate-0 schedule identical.
+                    if _requeued_by_fault(job.cell):
+                        continue
                     break
                 ok, _sag = gate_ok(job.cell)
                 if not ok:
@@ -678,14 +824,17 @@ def simulate(
                 break
             if chosen_job is None:
                 break
+            if fail_robot(crane, chosen_job.cell):
+                continue
             crane.free = False
             crane.job = chosen_job.index
             chosen_job.stage = "placing"
             steps = manhattan(crane.pos, chosen_job.cell)
             crane_steps += steps
-            travel = steps * clock.step_s
+            travel = steps * clock.step_s + stall_extra(crane, chosen_job.cell)
             crane.busy += travel
             log(CRANE, "to_place", chosen_job.index)
+            close_role_fail(CRANE, chosen_job.cell)
             push(travel, "start_handoff", (crane.index, chosen_job.index))
 
         # One fasten task per remaining joint. Joints of one voxel can
@@ -699,15 +848,21 @@ def simulate(
         for bot in fasteners:
             if not bot.free or not slots:
                 break
+            if bot.down_until > t:
+                continue
             job = jobs[slots.pop(0)]
+            if fail_robot(bot, job.cell):
+                slots.insert(0, job.index)
+                continue
             job.inflight += 1
             bot.free = False
             bot.job = job.index
             steps = manhattan(bot.pos, job.cell)
             fasten_steps += steps
-            travel = steps * clock.step_s
+            travel = steps * clock.step_s + stall_extra(bot, job.cell)
             bot.busy += travel + clock.fasten_joint_s
             log(FASTEN, "fasten", job.index)
+            close_role_fail(FASTEN, job.cell)
             push(travel + clock.fasten_joint_s, "fasten_done", (bot.index, job.index))
 
     def on_arrive_feed(cargo_index: int, station_index: int) -> None:
@@ -716,6 +871,7 @@ def simulate(
         job = jobs[cargo.job]  # type: ignore[index]
         station.inbound -= 1
         cargo.pos = station.pos
+        close_stall(cargo)
         job.stage = "at_feed"
         if station.serving is None and not station.waiting:
             start_load(station, cargo)
@@ -728,6 +884,20 @@ def simulate(
         station = feeds[station_index]
         job = jobs[cargo.job]  # type: ignore[index]
         station.serving = None
+        if faults is not None and faults.roll("drop"):
+            faults.begin(
+                "drop",
+                time_s=t,
+                robot=cargo.index,
+                role=CARGO,
+                cell=job.cell,
+            )
+            job.stage = "queued"
+            job.holder = None
+            cargo.free = True
+            cargo.job = None
+            cargo.pos = station.pos
+            return
         job.stage = "to_site"
         steps = manhattan(cargo.pos, job.cell)
         cargo_steps_add = steps
@@ -754,6 +924,7 @@ def simulate(
             cargo.busy += t - cargo.held_since
             cargo.held_since = None
         crane.pos = job.cell
+        close_stall(crane)
         cargo.busy += clock.handoff_s
         crane.busy += clock.handoff_s
         log(CARGO, "handoff", job.index)
@@ -771,10 +942,52 @@ def simulate(
         log(CRANE, "place", job.index)
         push(clock.place_s, "place_done", (crane_index, job_index))
 
+    def _capture_rejects(cell: tuple[int, int, int]) -> bool:
+        if faults is None or not faults.roll("capture"):
+            return False
+        if precision is None:
+            raise ValueError("a capture fault needs the precision model")
+        from .faults import CAPTURE_MISS
+
+        before = len(precision.scripted)
+        precision.scripted.append(CAPTURE_MISS)
+        # The scripted draw does not read this generator. A datum ignores
+        # the script; the model then seats the cell and this is not a miss.
+        outcome = precision.attempt(cell, precision_rng)
+        unused = (
+            len(precision.scripted) == before + 1
+            and precision.scripted[-1] == CAPTURE_MISS
+        )
+        if unused:
+            precision.scripted.pop()
+        if outcome.captured or unused:
+            precision.commit(cell, outcome.pose)
+            return False
+        return True
+
     def on_place_done(crane_index: int, job_index: int) -> None:
         nonlocal peak
         crane = cranes[crane_index]
         job = jobs[job_index]
+        if _capture_rejects(job.cell):
+            faults.begin(
+                "capture",
+                time_s=t,
+                robot=crane.index,
+                role=CRANE,
+                cell=job.cell,
+            )
+            job.stage = "queued"
+            job.holder = None
+            crane.free = True
+            crane.job = None
+            crane.pos = job.cell
+            return
+        if precision is not None and job.cell not in precision.poses:
+            outcome = precision.attempt(job.cell, precision_rng)
+            precision.commit(
+                job.cell, outcome.pose if outcome.captured else outcome.offered
+            )
         ok, sag = gate_ok(job.cell)
         if not ok:
             raise RuntimeError(
@@ -788,24 +1001,67 @@ def simulate(
         crane.free = True
         crane.job = None
         crane.pos = job.cell
+        if faults is not None:
+            faults.finish_cell(
+                job.cell,
+                time_s=t,
+                kinds=("capture", "drop", "cascade"),
+            )
         if not job.partners:
             job.stage = "done"
             fastened.add(job.cell)
+            close_finished_cell(job.cell)
 
     def on_fasten_done(bot_index: int, job_index: int) -> None:
         bot = fasteners[bot_index]
         job = jobs[job_index]
         job.inflight -= 1
+        close_stall(bot)
+        if (
+            faults is not None
+            and job.joints_done < len(job.partners)
+            and faults.roll("fastener")
+        ):
+            partner = job.partners[job.joints_done]
+            faults.begin(
+                "fastener",
+                time_s=t,
+                robot=bot.index,
+                role=FASTEN,
+                cell=job.cell,
+                joint=(job.cell, partner),
+            )
+            bot.free = True
+            bot.job = None
+            bot.pos = job.cell
+            return
+        partner = job.partners[job.joints_done]
         job.joints_done += 1
         bot.free = True
         bot.job = None
         bot.pos = job.cell
         log(FASTEN, "joined", job.index)
+        if faults is not None:
+            # Every failed attempt on this face closes when the face takes.
+            for index in list(faults._open):
+                event = faults.events[index]
+                if event.kind != "fastener" or event.cell != job.cell:
+                    continue
+                if event.joint is not None and event.joint[1] != partner:
+                    continue
+                faults.finish(index, time_s=t)
         if job.joints_done == len(job.partners):
             job.stage = "done"
             fastened.add(job.cell)
+            close_finished_cell(job.cell)
         elif job.joints_done > len(job.partners):
             raise RuntimeError("fastened a joint that does not exist")
+
+    def on_robot_up(_role: str, _index: int) -> None:
+        return
+
+    def on_outage_done(_station_index: int) -> None:
+        return
 
     handlers = {
         "arrive_feed": on_arrive_feed,
@@ -815,11 +1071,15 @@ def simulate(
         "handoff_done": on_handoff_done,
         "place_done": on_place_done,
         "fasten_done": on_fasten_done,
+        "robot_up": on_robot_up,
+        "outage_done": on_outage_done,
     }
 
     dispatch()
     guard = 0
     limit = max(1000, 50 * max(1, len(jobs)) * robots_per_role)
+    if faults is not None:
+        limit *= 20
     while heap:
         guard += 1
         if guard > limit:
@@ -887,4 +1147,7 @@ def simulate(
         worst_overhang=model.worst_overhang,
         place_order=tuple(place_order),
         events=tuple(events),
+        n_faults=0 if faults is None else len(faults.events),
+        n_cascades=0 if faults is None else faults.n_cascades,
+        n_scaffold=0,
     )

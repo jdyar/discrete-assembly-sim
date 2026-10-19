@@ -1,0 +1,25 @@
+Fault injection and recovery. Fault rates are configuration, not a measurement.
+k = 1.0, mass = 1.0, g = 1.0. Sag is mass·g/k. Joint demand is mass·g. Stiffness is not fit.
+Channels share one configured probability in {0.0, 0.05, 0.1, 0.2}.
+Seeds [0, 1, 2]. Stall 3 ticks, robot down 6 ticks, depot outage 4 ticks, shelter outage 40.0 s. Those durations are configuration.
+Python 3.12.3.
+
+## bridge (ticks)
+  rate 0.00 (configuration): completed 3/3, makespan median 82 (min 77, max 88, n=3), overhead median 0 (min -0.06098, max 0.07317, n=3), faults median 0 (min 0, max 0, n=3), cascades median 0 (min 0, max 0, n=3), recovery ticks n=0, scaffold insertions 0
+  rate 0.05 (configuration): completed 3/3, makespan median 89 (min 86, max 167, n=3), overhead median 0.08537 (min 0.04878, max 1.037, n=3), faults median 3 (min 2, max 7, n=3), cascades median 2 (min 0, max 5, n=3), recovery ticks median 32.5 (min 1, max 130, n=12), scaffold insertions 0
+  rate 0.10 (configuration): completed 3/3, makespan median 112 (min 86, max 146, n=3), overhead median 0.3659 (min 0.04878, max 0.7805, n=3), faults median 5 (min 2, max 8, n=3), cascades median 3 (min 0, max 6, n=3), recovery ticks median 19 (min 1, max 52, n=15), scaffold insertions 0
+  rate 0.20 (configuration): completed 3/3, makespan median 218 (min 178, max 232, n=3), overhead median 1.659 (min 1.171, max 1.829, n=3), faults median 9 (min 9, max 17, n=3), cascades median 4 (min 3, max 14, n=3), recovery ticks median 20 (min 2, max 155, n=35), scaffold insertions 0
+
+## cantilever (ticks)
+  rate 0.00 (configuration): completed 3/3, makespan median 24 (min 23, max 39, n=3), overhead median 0 (min -0.04167, max 0.625, n=3), faults median 0 (min 0, max 0, n=3), cascades median 0 (min 0, max 0, n=3), recovery ticks n=0, scaffold insertions 0
+  rate 0.05 (configuration): completed 3/3, makespan median 49 (min 23, max 100, n=3), overhead median 1.042 (min -0.04167, max 3.167, n=3), faults median 3 (min 0, max 6, n=3), cascades median 1 (min 0, max 4, n=3), recovery ticks median 22 (min 4, max 45, n=9), scaffold insertions 0
+  rate 0.10 (configuration): completed 3/3, makespan median 87 (min 23, max 135, n=3), overhead median 2.625 (min -0.04167, max 4.625, n=3), faults median 5 (min 0, max 7, n=3), cascades median 2 (min 0, max 5, n=3), recovery ticks median 26 (min 4, max 80, n=12), scaffold insertions 0
+  rate 0.20 (configuration): completed 3/3, makespan median 129 (min 28, max 168, n=3), overhead median 4.375 (min 0.1667, max 6, n=3), faults median 9 (min 1, max 12, n=3), cascades median 3 (min 0, max 5, n=3), recovery ticks median 7 (min 3, max 42, n=22), scaffold insertions 0
+
+## shelter (seconds)
+  rate 0.00 (configuration): completed 3/3, makespan median 1.119e+05 (min 1.119e+05, max 1.119e+05, n=3), overhead median 0 (min 0, max 0, n=3), faults median 0 (min 0, max 0, n=3), cascades median 0 (min 0, max 0, n=3), recovery seconds n=0, scaffold insertions 0
+  rate 0.05 (configuration): completed 3/3, makespan median 1.234e+05 (min 1.222e+05, max 1.235e+05, n=3), overhead median 0.1033 (min 0.09279, max 0.1042, n=3), faults median 207 (min 183, max 220, n=3), cascades median 46 (min 37, max 53, n=3), recovery seconds median 80 (min 0, max 2060, n=610), scaffold insertions 0
+  rate 0.10 (configuration): completed 3/3, makespan median 1.367e+05 (min 1.365e+05, max 1.388e+05, n=3), overhead median 0.2224 (min 0.2203, max 0.2408, n=3), faults median 425 (min 397, max 427, n=3), cascades median 159 (min 145, max 166, n=3), recovery seconds median 80 (min 0, max 3600, n=1249), scaffold insertions 0
+  rate 0.20 (configuration): completed 3/3, makespan median 1.684e+05 (min 1.616e+05, max 1.745e+05, n=3), overhead median 0.5051 (min 0.4447, max 0.5602, n=3), faults median 1012 (min 986, max 1062, n=3), cascades median 605 (min 588, max 656, n=3), recovery seconds median 100 (min 0, max 3480, n=3060), scaffold insertions 0
+
+Recovery: capture and fastener re-place through inspect/remove; drop and stall re-route; robot failure and feed outage reassign; scaffold is inserted only when the plain order is gone.

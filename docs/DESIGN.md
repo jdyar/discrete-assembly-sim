@@ -193,6 +193,15 @@ papers only:
   Scaffold placements do not draw. `k` is not an argument. Sag
   elsewhere stays the unfitted `k = 1`. The default box is the
   ARMADAS requirement (±1.78 cm, ±3°), not a measured histogram.
+- **Fault injection** (`sim/faults.py`) is opt-in. Six probabilities
+  on `FaultRates` are configuration, not a measured histogram. A
+  capture fault queues one out-of-claw draw and lets the precision
+  model reject it. A fastener fault names one face spring. Recovery
+  is the existing inspect / remove / kickback / resequence path,
+  including scaffold when that resequence has no order. The
+  stability, sag, and joint gates are the caller's; this module
+  does not turn them off. `faults=None` and a rate of zero leave
+  the previous streams alone. `k` is not an argument.
 
 ## Test discipline
 

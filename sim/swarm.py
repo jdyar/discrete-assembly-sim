@@ -49,10 +49,11 @@ from .choreographer import (
     plan_task,
     plan_walk,
 )
+from .faults import CAPTURE_MISS, face_partner, fastener_joint, script_capture_miss
 from .geometry import Geometry, SquareLattice2D
 from .planner import _approaches_for, plan_build_order
 from .reservations import ReservationConflict, ReservationTable
-from .stability import SagCap
+from .stability import SagCap, occupied_voxels
 from .world import SCAFFOLD, World
 
 Node = Hashable
@@ -235,6 +236,13 @@ class SwarmRobot:
         self.task_kind = "place"  # "remove" for a scripted scaffold removal
         self.storage: Node = start  # assigned park node (ARMADAS storage location)
         self.backoff_until = 0  # after a kickback: retreat before re-claiming
+        # Fault injection. Unused unless Swarm was given a FaultInjector.
+        self.stall_until = 0
+        self.down_until = 0
+        self.replan_same = False
+        self.fault_armed = False
+        self.pending_fault: str | None = None
+        self.drop_pending = False
 
     @property
     def anchor(self) -> Node:
@@ -261,6 +269,7 @@ class Swarm:
         sag: SagCap | None = None,
         joints=None,
         precision=None,
+        faults=None,
     ) -> None:
         if len(set(starts)) != len(starts):
             raise ValueError("robot starts must be distinct")
@@ -275,6 +284,13 @@ class Swarm:
         # Opt-in geometric capture. None keeps the Bernoulli defect roll.
         self.precision = precision
         self.capture_failures = 0
+        # Opt-in seeded faults. None leaves every roll, and the Bernoulli
+        # stream, untouched. Rates on the injector are configuration.
+        self.faults = faults
+        self.depot_closed_until = 0
+        self._fault_depth = 0
+        self._now = 0
+        self._capture_queued = False
         self.scaffold_cells = frozenset(scaffold_cells)
         self.sequencer = Sequencer(
             world,
@@ -382,11 +398,12 @@ class Swarm:
 
     def tick(self) -> None:
         nxt = self.tick_count + 1
+        self._now = nxt
 
         # Deferred repair-resequence (see Sequencer.repair): run it the
         # first tick the world is clean again.
         if self.sequencer.needs_resequence and not self.world.defect_count:
-            self.sequencer.resequence()
+            self._resequence()
             self.sequencer.needs_resequence = False
 
         # Phase 0: pin every planless robot before anyone plans. A robot
@@ -433,6 +450,8 @@ class Swarm:
         # Phase 2: execute this tick's steps.
         for r in self.robots:
             if r.itinerary and r.itinerary[0].t == nxt:
+                if self._interrupt(r):
+                    continue
                 self._execute(r, r.itinerary.pop(0))
             elif not r.itinerary:
                 r.state = "IDLE"
@@ -446,6 +465,13 @@ class Swarm:
 
     def _plan_for(self, r: SwarmRobot) -> None:
         t = self.tick_count
+        if t < r.down_until or t < r.stall_until:
+            if r.must_move and not r.itinerary:
+                self._escape(r)
+            return
+        if r.replan_same and r.task is not None:
+            self._replan_same(r)
+            return
         if t < r.backoff_until:
             # Fresh kickback: retreat toward storage instead of thrashing
             # through claim attempts from a contested spot.
@@ -512,7 +538,254 @@ class Swarm:
         r.task = cell
         r.task_kind = "remove" if removing else "place"
         r.state = "TASKED"
+        r.fault_armed = False
+        r.pending_fault = None
+        r.drop_pending = False
+        self._arm_faults(r)
         self._event(r, "claim", cell)
+        if self.faults is not None:
+            now = self.tick_count + 1
+            self.faults.finish_cell(
+                cell, tick=now, kinds=("robot_fail", "cascade")
+            )
+
+    def _replan_same(self, r: SwarmRobot) -> None:
+        """Route the task this robot already holds, after a stall.
+
+        The cell stays claimed. A failed replan returns it to the queue
+        and the stall's recovery becomes a reassign.
+        """
+        t = self.tick_count
+        cell = r.task
+        r.replan_same = False
+        assert cell is not None
+        stances = _approaches_for(cell, self.geometry)
+        anchors = [o.anchor for o in self.robots if o.id != r.id]
+        self.table.release_owner(r.id, t + 1)
+        removing = r.task_kind == "remove"
+        if removing:
+            plan = plan_remove_task(
+                r.id,
+                r.pos,
+                t,
+                cell,
+                stances,
+                self.geometry,
+                self.table,
+                self.depot,
+                anchors,
+                static_obstacles=self._obstacles_for(r),
+                stability=self.stability,
+                sag=self.sag,
+                joints=self.joints,
+            )
+        else:
+            plan = plan_task(
+                r.id,
+                r.pos,
+                t,
+                cell,
+                stances,
+                self.geometry,
+                self.table,
+                self.depot,
+                anchors,
+                self.inspect_enabled,
+                static_obstacles=self._obstacles_for(r),
+                remaining_cells=frozenset(self.sequencer.queue),
+                stability=self.stability,
+                sag=self.sag,
+                check_buildability=not self.sequencer.scripted,
+                joints=self.joints,
+            )
+        now = t + 1
+        if plan is None:
+            self._try_hold(r)
+            if (
+                self.table.deed_holder(cell) is not None
+                and self.world.is_empty(cell)
+            ):
+                self.table.clear_deed(cell)
+            self.sequencer.kickback(cell)
+            r.claim_cooldown[cell] = t + CLAIM_COOLDOWN
+            r.backoff_until = t + 3
+            r.task = None
+            r.fault_armed = False
+            r.pending_fault = None
+            self.kickbacks += 1
+            self._event(r, "kickback", cell)
+            if self.faults is not None:
+                self.faults.retarget("stall", r.id, "reassign")
+                self.faults.finish_kind("stall", robot=r.id, tick=now)
+            return
+        r.itinerary = list(plan.steps)
+        r.state = "TASKED"
+        if self.faults is not None:
+            self.faults.finish_kind("stall", robot=r.id, tick=now)
+
+    def _arm_faults(self, r: SwarmRobot) -> None:
+        """Draw stall and robot-failure once per claim. Zero rates do not draw."""
+        if self.faults is None or r.task_kind == "remove":
+            return
+        r.fault_armed = True
+        if self.faults.roll("robot_fail"):
+            r.pending_fault = "robot_fail"
+        elif self.faults.roll("stall"):
+            r.pending_fault = "stall"
+
+    def _interrupt(self, r: SwarmRobot) -> bool:
+        """Apply a mid-task stall or failure before this tick's step.
+
+        Returns true when the step must not run. The itinerary is cleared
+        and the existing abort / replan path owns the recovery.
+        """
+        kind = r.pending_fault
+        if kind is None or self.faults is None:
+            return False
+        r.pending_fault = None
+        if kind == "robot_fail":
+            self._robot_fail(r)
+            return True
+        if kind == "stall":
+            self._stall(r)
+            return True
+        return False
+
+    def _stall(self, r: SwarmRobot) -> None:
+        cell = r.task
+        assert self.faults is not None
+        self.faults.begin(
+            "stall",
+            tick=self._now,
+            robot=r.id,
+            cell=cell,
+        )
+        r.itinerary = []
+        self.table.release_owner(r.id, self._now)
+        if (
+            cell is not None
+            and self.table.deed_holder(cell) is not None
+            and self.world.is_empty(cell)
+        ):
+            self.table.clear_deed(cell)
+            self._fault_depth += 1
+            try:
+                self._abort_stale(cell, exclude=r)
+            finally:
+                self._fault_depth -= 1
+        r.stall_until = self._now + self.faults.rates.stall_ticks
+        r.replan_same = True
+        r.state = "STALL"
+
+    def _robot_fail(self, r: SwarmRobot) -> None:
+        assert self.faults is not None
+        cell = r.task
+        self.faults.begin(
+            "robot_fail",
+            tick=self._now,
+            robot=r.id,
+            cell=cell,
+        )
+        self._fault_depth += 1
+        try:
+            self._abort(r)
+        finally:
+            self._fault_depth -= 1
+        r.down_until = self._now + self.faults.rates.down_ticks
+        r.replan_same = False
+        r.state = "DOWN"
+
+    def _drop(self, r: SwarmRobot) -> None:
+        """Carried voxel is gone. Kick the task back and re-route to the depot."""
+        assert self.faults is not None
+        cell = r.task
+        self.faults.begin("drop", tick=self._now, robot=r.id, cell=cell)
+        self._fault_depth += 1
+        try:
+            self._abort(r)
+        finally:
+            self._fault_depth -= 1
+        r.state = "DROP"
+
+    def _refuse_feed(self, r: SwarmRobot) -> None:
+        """Depot is down. Return the task so it can be reassigned after the outage."""
+        assert self.faults is not None
+        cell = r.task
+        self._fault_depth += 1
+        try:
+            self._abort(r)
+        finally:
+            self._fault_depth -= 1
+        r.down_until = max(r.down_until, self.depot_closed_until)
+        r.state = "FEED"
+
+    def _resequence(self) -> None:
+        try:
+            self.sequencer.resequence()
+        except SwarmStuck:
+            if not self._try_scaffold():
+                raise
+
+    def _try_scaffold(self) -> bool:
+        """If the plain order is gone, add the smallest scaffold that restores one.
+
+        The finished structure still has to pass the caps. A 2D world has
+        no column search. ``k`` on the sag cap is the caller's; the
+        default in this repository is the unfitted ``k = 1``.
+        """
+        if self.faults is None or self.stability is None or self.sag is None:
+            return False
+        if not hasattr(self.world, "levels"):
+            return False
+        from .scaffold import plan_with_scaffold
+
+        plan = plan_with_scaffold(
+            self.world,
+            self.depot,
+            self.geometry.bound_factory(),
+            self.stability,
+            self.sag,
+            joints=self.joints,
+            max_nodes=20_000,
+            max_scaffold=4,
+        )
+        if plan is None or not plan.scaffold:
+            return False
+        self._install_scaffold(plan)
+        return True
+
+    def _install_scaffold(self, plan) -> None:
+        """Take a scaffold plan onto the scripted place-then-remove path."""
+        from .world import EMPTY
+
+        cells = tuple(plan.scaffold)
+        self.scaffold_cells = frozenset(set(self.scaffold_cells) | set(cells))
+        places = [
+            task.cell
+            for task in plan.place
+            if self.world.occupancy[task.cell] == EMPTY
+        ]
+        removes = [task.cell for task in plan.remove]
+        self.sequencer.scripted = True
+        self.sequencer._script_places = list(places)
+        self.sequencer._script_removes = list(removes)
+        self.sequencer.claimed.clear()
+        self.sequencer.phase = "place"
+        self.sequencer.queue = list(places)
+        self.sequencer.needs_resequence = False
+        now = getattr(self, "_now", self.tick_count)
+        if self.faults is not None:
+            for cell in cells:
+                self.faults.begin(
+                    "scaffold",
+                    recovery="scaffold",
+                    tick=now,
+                    cell=cell,
+                    rate=0.0,
+                )
+        for robot in self.robots:
+            if robot.task is not None and robot.itinerary:
+                self._abort(robot)
 
     def _try_hold(self, r: SwarmRobot) -> None:
         """Re-pin an idle robot (best effort); a partial hold marks it
@@ -670,23 +943,43 @@ class Swarm:
             r.pos = step.node
             r.state = "MOVING"
             self._event(r, "move", step.node)
+            if r.carrying and r.drop_pending:
+                r.drop_pending = False
+                r.itinerary.clear()
+                self._drop(r)
         elif step.action == WAIT:
             r.state = "WAITING"
         elif step.action == PICK:
+            if self._feed_blocked(r):
+                return
             r.carrying = True
             r.state = "PICK"
             self._event(r, "pick", step.node)
+            if self.faults is not None:
+                self.faults.finish_kind("feed_outage", tick=self._now)
+                if r.task_kind != "remove" and self.faults.roll("drop"):
+                    r.drop_pending = True
         elif step.action == PLACE:
+            if r.drop_pending:
+                r.drop_pending = False
+                self._drop(r)
+                return
             scaffold = step.target in self.scaffold_cells
-            defective = False if scaffold else self._roll_defect(step.target)
+            defective = False if scaffold else self._roll_defect(step.target, r)
             self.world.place_voxel(
                 step.target, defective=defective, scaffold=scaffold
             )
             r.carrying = False
             r.state = "PLACE"
             self._event(r, "place", step.target)
+            if scaffold and self.faults is not None:
+                self.faults.finish_cell(
+                    step.target, tick=self._now, kinds=("scaffold",)
+                )
             if not self.inspect_enabled:
                 self.sequencer.complete(step.target)
+                if self.faults is not None and not defective:
+                    self.faults.finish_cell(step.target, tick=self._now)
                 r.task = None
         elif step.action == INSPECT:
             r.state = "INSPECT"
@@ -698,6 +991,8 @@ class Swarm:
                 )
             else:
                 self.sequencer.complete(step.target)
+                if self.faults is not None:
+                    self.faults.finish_cell(step.target, tick=self._now)
                 r.task = None
         elif step.action == REMOVE:
             self.world.remove_voxel(step.target)
@@ -769,11 +1064,57 @@ class Swarm:
                 and self.world.is_empty(o.task)  # not yet placed
                 and self.geometry.heuristic_distance(o.task, retracted) <= 2
             ):
+                if self.faults is not None and self._fault_depth:
+                    self.faults.begin(
+                        "cascade",
+                        recovery="reassign",
+                        tick=getattr(self, "_now", self.tick_count + 1),
+                        robot=o.id,
+                        cell=o.task,
+                        rate=0.0,
+                    )
                 self._abort(o)
 
     # -- support -------------------------------------------------------------
 
-    def _roll_defect(self, cell: Node) -> bool:
+    def _sync_precision(self, occupied) -> None:
+        """Ideal poses for voxels placed before the model was attached.
+
+        A capture test is against mating faces. Cells the swarm already
+        built are datums at the grid center until a draw commits them.
+        """
+        if self.precision is None:
+            return
+        for existing in occupied:
+            key = tuple(int(v) for v in existing)
+            if key not in self.precision.poses:
+                self.precision.note_datum(key)
+
+    def _feed_blocked(self, r: SwarmRobot) -> bool:
+        """True when this pick must not happen because the depot is down.
+
+        An outage is configuration. The task is kicked back (reassign)
+        and the robot waits out the configured window.
+        """
+        if self.faults is None or r.task_kind == "remove":
+            return False
+        now = self._now
+        if self.depot_closed_until > now:
+            self._refuse_feed(r)
+            return True
+        if not self.faults.roll("feed_outage"):
+            return False
+        self.depot_closed_until = now + self.faults.rates.outage_ticks
+        self.faults.begin(
+            "feed_outage",
+            tick=now,
+            robot=r.id,
+            cell=r.task,
+        )
+        self._refuse_feed(r)
+        return True
+
+    def _roll_defect(self, cell: Node, robot: SwarmRobot | None = None) -> bool:
         forced = False
         if cell in self._defects_pending:
             self._defects_pending.discard(cell)
@@ -785,18 +1126,81 @@ class Swarm:
             and self.defect_p > 0
             and self.rng.random() < self.defect_p
         )
+        scripted = False
+        # A datum has no mating voxel. The precision model seats it, so
+        # the capture channel is not drawn. The rate applies to placements
+        # that actually have a face to miss.
+        occupied = occupied_voxels(self.world)
+        mating = face_partner(cell, occupied) is not None
+        if (
+            self.faults is not None
+            and not forced
+            and mating
+            and self.faults.roll("capture")
+        ):
+            if self.precision is None:
+                from .precision import PrecisionModel
+
+                self.precision = PrecisionModel(
+                    distribution="zero", check=True, snap=True
+                )
+            self._sync_precision(occupied)
+            before = len(self.precision.scripted)
+            script_capture_miss(self.precision)
+            scripted = len(self.precision.scripted) == before + 1
         missed = False
         if self.precision is not None:
+            self._sync_precision(occupied_voxels(self.world))
             # Coordinate arithmetic stays in sim.precision. A miss is the
             # same DEFECT flag the inspect/remove path already repairs.
+            # The sampler below is the swarm's rng only when the caller
+            # attached a model. A scripted miss does not draw it.
             outcome = self.precision.attempt(cell, self.rng)
+            if scripted and self.precision.scripted:
+                # A datum does not consume the script. Drop it so the
+                # next mating cell is not failed by a stale draw.
+                if self.precision.scripted[-1] == CAPTURE_MISS:
+                    self.precision.scripted.pop()
+                scripted = False
             if outcome.captured:
                 self.precision.commit(cell, outcome.pose)
             else:
                 self.precision.commit(cell, outcome.offered)
                 self.capture_failures += 1
                 missed = True
-        return forced or bernoulli or missed
+                if scripted and self.faults is not None:
+                    self.faults.begin(
+                        "capture",
+                        tick=self._now,
+                        robot=None if robot is None else robot.id,
+                        cell=cell,
+                    )
+        fastener = False
+        if (
+            self.faults is not None
+            and not forced
+            and not missed
+            and not bernoulli
+            and self.faults.roll("fastener")
+        ):
+            # Neighbors already placed. The new cell is not occupied yet.
+            joint, util = fastener_joint(
+                cell,
+                occupied_voxels(self.world),
+                self.stability,
+                self.joints,
+            )
+            if joint is not None:
+                fastener = True
+                self.faults.begin(
+                    "fastener",
+                    tick=self._now,
+                    robot=None if robot is None else robot.id,
+                    cell=cell,
+                    joint=joint,
+                    utilization=util,
+                )
+        return forced or bernoulli or missed or fastener
 
     def _event(self, r: SwarmRobot, kind: str, node: Node) -> None:
         self.events.append((self.tick_count + 1, r.id, kind, node))
